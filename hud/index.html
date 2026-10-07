@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>侧写 - 桌面军师</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- 折叠小胶囊态 -->
+    <div id="capsule-panel" class="capsule-panel hidden">
+        <div class="capsule-inner">
+            <span id="capsule-dot" class="status-dot monitoring"></span>
+            <span id="capsule-text" class="capsule-text">侧写 就绪</span>
+            <button id="btn-expand" class="capsule-btn">展开</button>
+            <button id="btn-capsule-quit" class="capsule-close-btn" title="退出程序">✕</button>
+        </div>
+    </div>
+
+    <!-- 展开主工作区 -->
+    <div id="main-container" class="main-container">
+        
+        <!-- 顶栏全局状态与导航 -->
+        <header class="top-bar">
+            <div class="top-left">
+                <span class="brand-title">侧写</span>
+                <div class="select-wrapper">
+                    <select id="target-select" class="target-select">
+                        <option value="">加载中...</option>
+                    </select>
+                </div>
+            </div>
+            <div class="top-right">
+                <button id="btn-toggle-view" class="action-btn">导入建档</button>
+                <button id="btn-fold" class="action-btn btn-fold" title="折叠为小胶囊">折叠</button>
+                <button id="btn-quit" class="action-btn btn-quit" title="退出程序">✕</button>
+            </div>
+        </header>
+
+        <!-- 视图 A: 对话监控与双轨辅助 (Monitor View) -->
+        <main id="view-monitor" class="view-panel">
+
+            <!-- 对话上下文看板 (以我方回复为结算点) -->
+            <section class="conversation-context-section">
+                <!-- 对方消息 -->
+                <div class="context-block target-block">
+                    <div class="section-meta">
+                        <div class="sender-info">
+                            <span class="status-dot monitoring"></span>
+                            <span class="sender-tag">对方消息</span>
+                            <span id="target-sender-name" class="sender-name">就绪</span>
+                        </div>
+                        <div class="meta-right">
+                            <button id="btn-trigger-capture" class="mini-btn capture-btn">抓取最新</button>
+                            <span id="target-message-time" class="message-time">刚刚</span>
+                        </div>
+                    </div>
+                    <div id="incoming-message-box" class="incoming-box">点击“抓取最新”同步当前微信窗口对话</div>
+                </div>
+
+                <!-- 我方最新回复 -->
+                <div class="context-block ego-block">
+                    <div class="section-meta">
+                        <div class="sender-info">
+                            <span id="ego-status-dot" class="status-dot ego-dot"></span>
+                            <span class="sender-tag ego-tag">我最新回复</span>
+                            <span id="ego-status-badge" class="status-badge badge-pending">待回复</span>
+                        </div>
+                        <div class="meta-right">
+                            <span id="ego-settlement-tip" class="settlement-tip">以回消息为结算</span>
+                        </div>
+                    </div>
+                    <div id="ego-message-box" class="ego-box pending-state">无（暂未回复）</div>
+                </div>
+            </section>
+
+            <!-- 双轨 2x3 选项输出网格 (CSS Grid 强基线对齐，同行严格微调对应) -->
+            <section class="dual-track-section">
+                <div id="dual-track-grid" class="dual-track-grid">
+                    <div class="track-header header-native">直觉原句</div>
+                    <div class="track-header header-evolved">微调提升</div>
+
+                    <!-- 槽位 1 & 4 (第一行对齐) -->
+                    <div class="option-card" data-slot="1" data-reply="适合自己的穿起来最顺眼，没必要硬逼着自己换风格">
+                        <div class="card-meta">
+                            <span class="sub-goal">审美认同</span>
+                            <span class="copy-badge">点击复制</span>
+                        </div>
+                        <div class="card-text">适合自己的穿起来最顺眼，没必要硬逼着自己换风格</div>
+                    </div>
+                    <div class="option-card card-elevated" data-slot="4" data-reply="哈哈哈哈室友也是操碎了心，但审美这玩意儿本来就是自己的出厂设置，哪能说变就变">
+                        <div class="card-meta">
+                            <span class="sub-goal elevated-tag">打趣室友</span>
+                            <span class="copy-badge">点击复制</span>
+                        </div>
+                        <div class="card-text">哈哈哈哈室友也是操碎了心，但审美这玩意儿本来就是自己的出厂设置，哪能说变就变</div>
+                    </div>
+
+                    <!-- 槽位 2 & 5 (第二行对齐) -->
+                    <div class="option-card" data-slot="2" data-reply="我也这样，每次挑半天最后买回来的还是跟衣柜里一模一样的款式">
+                        <div class="card-meta">
+                            <span class="sub-goal">老友同频</span>
+                            <span class="copy-badge">点击复制</span>
+                        </div>
+                        <div class="card-text">我也这样，每次挑半天最后买回来的还是跟衣柜里一模一样的款式</div>
+                    </div>
+                    <div class="option-card card-elevated" data-slot="5" data-reply="哈哈哈哈我也是，每次想突破一下买件别的风格，拿回家挂衣柜里一次不穿最后全落灰了">
+                        <div class="card-meta">
+                            <span class="sub-goal elevated-tag">试错共鸣</span>
+                            <span class="copy-badge">点击复制</span>
+                        </div>
+                        <div class="card-text">哈哈哈哈我也是，每次想突破一下买件别的风格，拿回家挂衣柜里一次不穿最后全落灰了</div>
+                    </div>
+
+                    <!-- 槽位 3 & 6 (第三行对齐) -->
+                    <div class="option-card" data-slot="3" data-reply="黑了那是暂时的，在屋里捂一阵子新陈代谢一轮就白回来了">
+                        <div class="card-meta">
+                            <span class="sub-goal">宽慰接茬</span>
+                            <span class="copy-badge">点击复制</span>
+                        </div>
+                        <div class="card-text">黑了那是暂时的，在屋里捂一阵子新陈代谢一轮就白回来了</div>
+                    </div>
+                    <div class="option-card card-elevated" data-slot="6" data-reply="等过两天降温套上长袖连晒黑都瞅不着了，买自己喜欢的穿着自在比啥都强">
+                        <div class="card-meta">
+                            <span class="sub-goal elevated-tag">自在穿搭</span>
+                            <span class="copy-badge">点击复制</span>
+                        </div>
+                        <div class="card-text">等过两天降温套上长袖连晒黑都瞅不着了，买自己喜欢的穿着自在比啥都强</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 底部纯鼠标操作指引与防线 -->
+            <footer class="monitor-footer">
+                <span class="footer-tip">单击卡片复制 · 单击抓取最新 · 基于知识库大白话微调</span>
+            </footer>
+        </main>
+
+        <!-- 视图 B: 数据导入与自由建档 (Ingestion View) -->
+        <main id="view-ingest" class="view-panel hidden">
+            <div class="ingest-header">
+                <div class="view-title">联系人档案录入与数据摄取</div>
+            </div>
+
+            <div class="ingest-scroll-container">
+                <form id="onboard-form" class="ingest-form" onsubmit="return false;">
+                    <!-- 1. 微信备注名 -->
+                    <div class="form-group">
+                        <label for="input-target-name">1. 微信备注名 (必填):</label>
+                        <input type="text" id="input-target-name" class="text-input" placeholder="例如: 小张 (填微信里的备注名即可)" required>
+                        <div class="form-hint-text">提示: 抓取根据微信当前打开的聊天窗口自动核验</div>
+                    </div>
+
+                    <!-- 2. 自由描述纯填空 -->
+                    <div class="form-group">
+                        <label for="input-free-text">2. 关于 TA 与你想怎么聊 (自由描述，AI 自行分析):</label>
+                        <textarea id="input-free-text" class="text-area" rows="3" placeholder="写写关系背景或交互感觉，比如：
+大学室友兼同事，说话极致松弛互损，不用客套，多用短句... (可留空，后续边聊边学)"></textarea>
+                    </div>
+
+                    <!-- 3. 历史聊天记录文件夹拖拽 -->
+                    <div class="form-group">
+                        <label>3. 历史聊天记录文件夹 (可选):</label>
+                        <div id="folder-dropzone" class="dropzone">
+                            <div id="dropzone-text" class="dropzone-text">将聊天记录文件夹拖入此处 (或输入绝对路径)</div>
+                            <input type="text" id="input-folder-path" class="text-input drop-path-input" placeholder="文件夹绝对路径，如: /Users/.../chat_history">
+                        </div>
+                    </div>
+
+                    <!-- 知识库位置指引提示 -->
+                    <div class="knowledge-tip-card">
+                        提示: 沟通策略知识库位于 knowledge/ 目录，可随时放入自定义 md 丰富战术策略
+                    </div>
+                </form>
+            </div>
+
+            <!-- 底部操作区 (紧跟表单下方，绝无留白) -->
+            <div class="form-actions">
+                <button type="button" id="btn-reset-form" class="btn-secondary">重置</button>
+                <button type="button" id="btn-submit-onboard" class="btn-primary">智能分析并建档</button>
+            </div>
+        </main>
+
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

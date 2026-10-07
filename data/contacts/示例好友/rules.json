@@ -1,0 +1,16 @@
+{
+  "target_name": "示例好友",
+  "sentence_length": {
+    "min": 10,
+    "max": 25,
+    "ideal": 16
+  },
+  "cadence": "comma_separated_flow",
+  "forbidden_punctuation": ["。", "！", "!", "."],
+  "forbidden_emojis": ["[破涕为笑]", "[捂脸]"],
+  "allowed_emojis": ["[偷笑]", "[笑脸]"],
+  "banned_phrases": [
+    "属于是", "当牛马", "退休养老", "辛苦了", "注意身体"
+  ],
+  "tone_keywords": ["生活反差", "冷幽默接话", "大白话", "松弛感"]
+}

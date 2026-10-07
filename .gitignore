@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS / OS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# Databases & logs
+*.db
+*.sqlite
+*.log
+*.png
+*.jpg
+*.jpeg
+
+# Environment variables & secrets (保护本地 LLM Key)
+.env
+.env.local
+*.env
+
+# Contact data sandboxing & privacy protection (数据去敏隔离)
+# 本地保留个人数据，但绝不追踪上传至公开仓库
+data/contacts/*
+!data/contacts/示例好友/
+!data/contacts/.gitkeep

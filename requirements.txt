@@ -1,0 +1,14 @@
+# 侧写 (Cexie) - 项目核心依赖清单
+# 仅面向 macOS 运行 (深度依赖 Apple 原生 Quartz 窗口截图与 Apple Vision OCR)
+
+# 桌面轻量透明 WebKit 悬浮窗容器
+pywebview>=5.0.0
+
+# 图像切片与色彩分析
+Pillow>=10.0.0
+
+# macOS 核心系统桥接 (Quartz 窗口捕获、Cocoa 窗口调度与原生 Apple Vision 离线高精度 OCR)
+pyobjc-core>=10.0
+pyobjc-framework-Cocoa>=10.0
+pyobjc-framework-Quartz>=10.0
+pyobjc-framework-Vision>=10.0
