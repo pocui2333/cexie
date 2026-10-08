@@ -52,6 +52,29 @@ def capture_wechat_chat_context(expected_target: Optional[str] = None) -> Tuple[
         res.dialogue_context
     )
 
+def detect_input_divider_y(img: Image.Image) -> int:
+    """动态扫描微信聊天气泡区与输入框之间的水平物理分割线纵坐标 (跨屏幕与分辨率自适应)"""
+    w, h = img.size
+    x_start = int(w * 0.35)
+    x_end = int(w * 0.90)
+    # 扫描窗口 55% ~ 82% 高度范围
+    for y in range(int(h * 0.55), int(h * 0.82)):
+        pixels = [img.getpixel((x, y))[:3] for x in range(x_start, x_end, 6)]
+        r_vals = [p[0] for p in pixels]
+        g_vals = [p[1] for p in pixels]
+        b_vals = [p[2] for p in pixels]
+        avg_r = sum(r_vals) / len(r_vals)
+        avg_g = sum(g_vals) / len(g_vals)
+        avg_b = sum(b_vals) / len(b_vals)
+        var = sum((r - avg_r)**2 + (g - avg_g)**2 + (b - avg_b)**2 for r, g, b in pixels) / len(pixels)
+        if var < 15:  # 纯色水平横线特征
+            p_above = img.getpixel((int(w * 0.5), y - 2))[:3]
+            p_curr = img.getpixel((int(w * 0.5), y))[:3]
+            diff = sum(abs(a - b) for a, b in zip(p_above, p_curr))
+            if diff > 15:
+                return y
+    return int(h * 0.73)  # 兜底安全边界
+
 def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureResult:
     """
     核心执行器：单次静默抓取并构建高内聚的 ChatCaptureResult
@@ -78,29 +101,6 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
                     reply_status="mismatch",
                     is_mismatch=True
                 )
-
-def detect_input_divider_y(img: Image.Image) -> int:
-    """动态扫描微信聊天气泡区与输入框之间的水平物理分割线纵坐标 (跨屏幕与分辨率自适应)"""
-    w, h = img.size
-    x_start = int(w * 0.35)
-    x_end = int(w * 0.90)
-    # 扫描窗口 55% ~ 82% 高度范围
-    for y in range(int(h * 0.55), int(h * 0.82)):
-        pixels = [img.getpixel((x, y))[:3] for x in range(x_start, x_end, 6)]
-        r_vals = [p[0] for p in pixels]
-        g_vals = [p[1] for p in pixels]
-        b_vals = [p[2] for p in pixels]
-        avg_r = sum(r_vals) / len(r_vals)
-        avg_g = sum(g_vals) / len(g_vals)
-        avg_b = sum(b_vals) / len(b_vals)
-        var = sum((r - avg_r)**2 + (g - avg_g)**2 + (b - avg_b)**2 for r, g, b in pixels) / len(pixels)
-        if var < 15:  # 纯色水平横线特征
-            p_above = img.getpixel((int(w * 0.5), y - 2))[:3]
-            p_curr = img.getpixel((int(w * 0.5), y))[:3]
-            diff = sum(abs(a - b) for a, b in zip(p_above, p_curr))
-            if diff > 15:
-                return y
-    return int(h * 0.73)  # 兜底安全边界
 
         # 3. 动态自适应裁剪聊天消息气泡区域 (精准停在输入框分割线上方，跨屏幕与分辨率自适应)
         img = Image.open(tmp_win)
