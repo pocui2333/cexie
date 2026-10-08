@@ -52,6 +52,7 @@
                         </div>
                         <div class="meta-right">
                             <button id="btn-trigger-capture" class="mini-btn capture-btn">抓取最新</button>
+                            <button id="btn-auto-loop" class="mini-btn auto-loop-btn" title="开启每60秒自动循环抓取">自动循环</button>
                             <span id="target-message-time" class="message-time">刚刚</span>
                         </div>
                     </div>
@@ -74,64 +75,91 @@
                 </div>
             </section>
 
-            <!-- 双轨 2x3 选项输出网格 (CSS Grid 强基线对齐，同行严格微调对应) -->
-            <section class="dual-track-section">
-                <div id="dual-track-grid" class="dual-track-grid">
-                    <div class="track-header header-native">直觉原句</div>
-                    <div class="track-header header-evolved">微调提升</div>
-
-                    <!-- 槽位 1 & 4 (第一行对齐) -->
-                    <div class="option-card" data-slot="1" data-reply="适合自己的穿起来最顺眼，没必要硬逼着自己换风格">
-                        <div class="card-meta">
-                            <span class="sub-goal">审美认同</span>
-                            <span class="copy-badge">点击复制</span>
+            <!-- 统计看板面板 (无新建议/已回复时展示，今日互动分析 2x2 网格，无表情包) -->
+            <section id="stats-section" class="stats-section" style="display: none;">
+                <div class="stats-header">
+                    <span class="stats-title">今日互动与动态分析</span>
+                    <span id="stats-status-tag" class="stats-status-tag">候场中</span>
+                </div>
+                <div class="stats-grid">
+                    <!-- 卡片 1: 今日消息与比例 (相互发了多少条) -->
+                    <div class="stat-card">
+                        <div class="stat-meta">
+                            <span class="stat-label">今日消息</span>
+                            <span id="stat-balance-tip" class="stat-badge">双向互动</span>
                         </div>
-                        <div class="card-text">适合自己的穿起来最顺眼，没必要硬逼着自己换风格</div>
-                    </div>
-                    <div class="option-card card-elevated" data-slot="4" data-reply="哈哈哈哈室友也是操碎了心，但审美这玩意儿本来就是自己的出厂设置，哪能说变就变">
-                        <div class="card-meta">
-                            <span class="sub-goal elevated-tag">打趣室友</span>
-                            <span class="copy-badge">点击复制</span>
+                        <div class="stat-main">
+                            <div class="stat-ratio-text">
+                                <span class="stat-ratio-ego" id="stat-ego-ratio">我 0条</span>
+                                <span class="stat-ratio-divider">/</span>
+                                <span class="stat-ratio-target" id="stat-target-ratio">TA 0条</span>
+                            </div>
+                            <div class="stat-progress-bar">
+                                <div id="stat-progress-fill" class="progress-fill" style="width: 50%;"></div>
+                            </div>
                         </div>
-                        <div class="card-text">哈哈哈哈室友也是操碎了心，但审美这玩意儿本来就是自己的出厂设置，哪能说变就变</div>
-                    </div>
-
-                    <!-- 槽位 2 & 5 (第二行对齐) -->
-                    <div class="option-card" data-slot="2" data-reply="我也这样，每次挑半天最后买回来的还是跟衣柜里一模一样的款式">
-                        <div class="card-meta">
-                            <span class="sub-goal">老友同频</span>
-                            <span class="copy-badge">点击复制</span>
-                        </div>
-                        <div class="card-text">我也这样，每次挑半天最后买回来的还是跟衣柜里一模一样的款式</div>
-                    </div>
-                    <div class="option-card card-elevated" data-slot="5" data-reply="哈哈哈哈我也是，每次想突破一下买件别的风格，拿回家挂衣柜里一次不穿最后全落灰了">
-                        <div class="card-meta">
-                            <span class="sub-goal elevated-tag">试错共鸣</span>
-                            <span class="copy-badge">点击复制</span>
-                        </div>
-                        <div class="card-text">哈哈哈哈我也是，每次想突破一下买件别的风格，拿回家挂衣柜里一次不穿最后全落灰了</div>
+                        <div id="stat-balance-desc" class="stat-sub">今日累计互动 · 话轮均衡</div>
                     </div>
 
-                    <!-- 槽位 3 & 6 (第三行对齐) -->
-                    <div class="option-card" data-slot="3" data-reply="黑了那是暂时的，在屋里捂一阵子新陈代谢一轮就白回来了">
-                        <div class="card-meta">
-                            <span class="sub-goal">宽慰接茬</span>
-                            <span class="copy-badge">点击复制</span>
+                    <!-- 卡片 2: 互动热度 / 兴趣窗口 -->
+                    <div class="stat-card">
+                        <div class="stat-meta">
+                            <span class="stat-label">互动热度</span>
+                            <span id="stat-warmth-badge" class="stat-badge">高兴趣</span>
                         </div>
-                        <div class="card-text">黑了那是暂时的，在屋里捂一阵子新陈代谢一轮就白回来了</div>
+                        <div class="stat-main">
+                            <div class="stat-value-highlight">
+                                <span class="stat-num" id="stat-warmth-score">80</span>
+                                <span class="stat-unit">分</span>
+                                <span class="stat-ratio-divider" style="margin: 0 4px;">·</span>
+                                <span id="stat-warmth-window" class="stat-text-highlight">高兴趣窗口</span>
+                            </div>
+                            <div class="stat-progress-bar">
+                                <div id="stat-warmth-fill" class="progress-fill heat-fill" style="width: 80%;"></div>
+                            </div>
+                        </div>
+                        <div class="stat-sub" id="stat-warmth-tactic">情绪高位 · 适合顺势拉扯或邀约</div>
                     </div>
-                    <div class="option-card card-elevated" data-slot="6" data-reply="等过两天降温套上长袖连晒黑都瞅不着了，买自己喜欢的穿着自在比啥都强">
-                        <div class="card-meta">
-                            <span class="sub-goal elevated-tag">自在穿搭</span>
-                            <span class="copy-badge">点击复制</span>
+
+                    <!-- 卡片 3: 今日动态微观分析 -->
+                    <div class="stat-card">
+                        <div class="stat-meta">
+                            <span class="stat-label">今日动态</span>
+                            <span id="stat-dynamic-badge" class="stat-badge-subtle">主动分享生活</span>
                         </div>
-                        <div class="card-text">等过两天降温套上长袖连晒黑都瞅不着了，买自己喜欢的穿着自在比啥都强</div>
+                        <div class="stat-main">
+                            <div class="stat-value-highlight">
+                                <span id="stat-dynamic-title" class="stat-text-highlight">日常松弛互动</span>
+                            </div>
+                        </div>
+                        <div id="stat-dynamic-desc" class="stat-sub">老友日常碎语交流 · 氛围松弛无压力</div>
+                    </div>
+
+                    <!-- 卡片 4: 今日话题焦点 -->
+                    <div class="stat-card">
+                        <div class="stat-meta">
+                            <span class="stat-label">今日话题</span>
+                            <span class="stat-badge-subtle">今日热词</span>
+                        </div>
+                        <div class="stat-main">
+                            <div id="stat-tags-container" class="stat-tags-list">
+                                <span class="stat-tag">日常</span>
+                                <span class="stat-tag">交流</span>
+                                <span class="stat-tag">唠嗑</span>
+                            </div>
+                        </div>
+                        <div class="stat-sub">今日核心讨论焦点</div>
                     </div>
                 </div>
             </section>
 
-            <!-- 底部纯鼠标操作指引与防线 -->
-            <footer class="monitor-footer">
+            <!-- 双轨 2x3 选项输出网格 (待回复时动态展开) -->
+            <section class="dual-track-section" style="display: none;">
+                <div id="dual-track-grid" class="dual-track-grid"></div>
+            </section>
+
+            <!-- 底部纯鼠标操作指引与防线 (有卡片时展示) -->
+            <footer class="monitor-footer" style="display: none;">
                 <span class="footer-tip">单击卡片复制 · 单击抓取最新 · 基于知识库大白话微调</span>
             </footer>
         </main>

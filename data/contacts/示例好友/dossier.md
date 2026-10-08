@@ -3,7 +3,7 @@ wechat_name: "示例好友"
 alias: ["小张", "老张"]
 relation: "多年好友 / 户外伙伴"
 mbti: "ENFP"
-hometown: "辽宁大连"
+hometown: "北方某城"
 known_entities: ["老李", "小刘", "阿黄"]
 ---
 

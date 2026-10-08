@@ -67,8 +67,11 @@ def extract_contact_from_header(screenshot_path: str) -> Optional[str]:
         # 裁剪顶栏中央区域 (避免侧边栏干扰，覆盖联系人/群聊名)
         crop_box = (int(w * 0.26), 0, int(w * 0.70), int(h * 0.09))
         cropped = img.crop(crop_box)
+        cw, ch = cropped.size
+        # 放大 2 倍以强化视网膜小字号汉字的识别精度 (避免笔画粘连或形近字误判)
+        upscaled = cropped.resize((cw * 2, ch * 2), Image.Resampling.LANCZOS)
         tmp_crop = "/tmp/echolens_header_crop.png"
-        cropped.save(tmp_crop)
+        upscaled.save(tmp_crop)
 
         observations = run_vision_ocr(tmp_crop)
         if not observations:

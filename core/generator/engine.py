@@ -32,16 +32,17 @@ class DualTrackGenerator:
     ) -> DualTrackResult:
         rules = self._load_rules(target_name)
         text_clean = incoming_text.strip()
+        ego_utterances = self._load_recent_ego_utterances(target_name)
 
         options_data = None
         if config.LLM_API_KEY:
             try:
-                options_data = self._call_llm(target_name, text_clean, memory_episodes, rules, context_text)
+                options_data = self._call_llm(target_name, text_clean, memory_episodes, rules, context_text, ego_utterances)
             except Exception as e:
                 print(f"[LLM Generate Error] {e}")
 
         if not options_data or len(options_data) != 6:
-            options_data = synthesize_scenario_options(target_name, text_clean, memory_episodes, rules, context_text)
+            options_data = synthesize_scenario_options(target_name, text_clean, memory_episodes, rules, context_text, ego_utterances)
 
         options: List[GenerationOption] = []
         for idx, item in enumerate(options_data, start=1):
@@ -60,19 +61,56 @@ class DualTrackGenerator:
             options=options
         )
 
+    def _load_recent_ego_utterances(self, target_name: str, limit: int = 8) -> List[str]:
+        db_path = os.path.join(self.contacts_dir, target_name, "index.db")
+        if not os.path.exists(db_path):
+            return []
+        results = []
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT facts_summary FROM episode_records 
+                WHERE facts_summary LIKE '%我:%' 
+                ORDER BY id DESC LIMIT 50
+            """)
+            for row in cur.fetchall():
+                matches = re.findall(r'我:\s*([^;。\n]+)', row[0])
+                for m in matches:
+                    cleaned = m.strip()
+                    if cleaned and cleaned not in results and 2 <= len(cleaned) <= 60 and "暂未回复" not in cleaned:
+                        results.append(cleaned)
+                        if len(results) >= limit:
+                            break
+                if len(results) >= limit:
+                    break
+            conn.close()
+        except Exception:
+            pass
+        return results
+
     def _call_llm(
         self,
         target_name: str,
         incoming_text: str,
         memory: List[Dict[str, Any]],
         rules: Dict[str, Any],
-        context_text: Optional[str] = None
+        context_text: Optional[str] = None,
+        ego_utterances: Optional[List[str]] = None
     ) -> Optional[List[Dict[str, str]]]:
+        import ssl
+        try:
+            import certifi
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            ssl_ctx = ssl._create_unverified_context()
+
         ego_profile = self._load_ego_profile()
         target_dossier = self._load_target_dossier(target_name)
 
         system_prompt = build_system_prompt(target_name, rules, ego_profile, target_dossier)
-        user_prompt = build_user_prompt(incoming_text, memory, context_text, target_dossier)
+        user_prompt = build_user_prompt(incoming_text, memory, context_text, target_dossier, ego_utterances)
 
         url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"
         headers = {
@@ -90,13 +128,28 @@ class DualTrackGenerator:
         }
 
         req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=8.0) as resp:
+        with urllib.request.urlopen(req, context=ssl_ctx, timeout=12.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             content = data["choices"][0]["message"]["content"].strip()
             if content.startswith("```"):
                 content = re.sub(r"^```(?:json)?\n?", "", content)
                 content = re.sub(r"\n?```$", "", content)
-            parsed = json.loads(content)
+            
+            # 提取 JSON 数组
+            match = re.search(r"\[\s*\{.*\}\s*\]", content, re.DOTALL)
+            if match:
+                content = match.group(0)
+
+            # 清理常见非法尾随逗号与格式瑕疵
+            cleaned_json = re.sub(r',\s*([\]}])', r'\1', content)
+            try:
+                parsed = json.loads(cleaned_json, strict=False)
+            except Exception:
+                try:
+                    parsed = json.loads(content, strict=False)
+                except Exception:
+                    parsed = None
+
             if isinstance(parsed, list) and len(parsed) == 6:
                 return parsed
         return None

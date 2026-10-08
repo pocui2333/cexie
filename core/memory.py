@@ -83,3 +83,34 @@ class EntityMemoryRetriever:
                 # 截取前 800 字作为关键人设画像
                 return content[:800]
         return ""
+
+    def get_recent_ego_utterances(self, target_name: str, limit: int = 8) -> List[str]:
+        """动态提取我方对该好友在历史事实记录中的真实发言原句 (Few-Shot 真实说话风格基准)"""
+        sandbox_dir = os.path.join(self.contacts_dir, target_name)
+        db_path = os.path.join(sandbox_dir, "index.db")
+        if not os.path.exists(db_path):
+            return []
+        results = []
+        try:
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT facts_summary FROM episode_records 
+                WHERE facts_summary LIKE '%我:%' 
+                ORDER BY id DESC LIMIT 50
+            """)
+            for row in cur.fetchall():
+                matches = re.findall(r'我:\s*([^;。\n]+)', row[0])
+                for m in matches:
+                    cleaned = m.strip()
+                    if cleaned and cleaned not in results and 2 <= len(cleaned) <= 60 and "暂未回复" not in cleaned:
+                        results.append(cleaned)
+                        if len(results) >= limit:
+                            break
+                if len(results) >= limit:
+                    break
+            conn.close()
+        except Exception:
+            pass
+        return results
+

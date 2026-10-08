@@ -371,6 +371,35 @@ html, body {
     border-color: var(--accent-blue);
 }
 
+.auto-loop-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    font-weight: 500;
+    min-width: 54px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.auto-loop-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--text-primary);
+    border-color: var(--border-hover);
+}
+
+.auto-loop-btn.active {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    color: #fbbf24;
+    font-weight: 600;
+}
+
+.auto-loop-btn.active:hover {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: rgba(239, 68, 68, 0.5);
+    color: #f87171;
+}
+
 .status-dot.ego-dot {
     background: #10b981;
     box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
@@ -450,6 +479,236 @@ html, body {
     border-left-color: rgba(245, 158, 11, 0.6);
     color: var(--text-muted);
     font-style: italic;
+}
+
+/* ==========================================================================
+   统计看板面板 (Stats Section) - 2x2 极简轻量数据网格，无表情包，精细对齐
+   ========================================================================== */
+.stats-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 1px;
+}
+
+.stats-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2px;
+}
+
+.stats-title {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.stats-status-tag {
+    font-size: 9px;
+    font-weight: 500;
+    color: #34d399;
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    padding: 1px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.2px;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.stat-card {
+    background: linear-gradient(180deg, rgba(23, 24, 30, 0.95) 0%, rgba(18, 19, 24, 0.98) 100%);
+    border: 1px solid var(--border-card);
+    border-radius: 6px;
+    padding: 7px 10px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 5px;
+    box-sizing: border-box;
+    min-height: 60px;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.stat-card:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+    background: linear-gradient(180deg, rgba(27, 28, 35, 0.95) 0%, rgba(20, 21, 28, 0.98) 100%);
+}
+
+.stat-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 14px;
+}
+
+.stat-label {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-muted);
+    letter-spacing: 0.3px;
+}
+
+.stat-badge {
+    font-size: 9px;
+    font-weight: 600;
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.1);
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    padding: 0 4px;
+    border-radius: 3px;
+    line-height: 13px;
+}
+
+.stat-badge-subtle {
+    font-size: 9px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0 4px;
+    border-radius: 3px;
+    line-height: 13px;
+}
+
+.stat-indicator.pulse-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+    animation: pulseDot 2s infinite ease-in-out;
+}
+
+.stat-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.stat-ratio-text {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+}
+
+.stat-ratio-ego {
+    color: var(--accent-blue);
+}
+
+.stat-ratio-divider {
+    color: var(--text-muted);
+    font-size: 9px;
+    opacity: 0.5;
+}
+
+.stat-ratio-target {
+    color: var(--text-secondary);
+}
+
+.stat-progress-bar {
+    width: 100%;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-blue) 0%, #60a5fa 100%);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+.progress-fill.heat-fill {
+    background: linear-gradient(90deg, #f59e0b 0%, #fb923c 60%, #f43f5e 100%);
+}
+
+.stat-badge.badge-amber {
+    color: #fb923c;
+    background: rgba(251, 146, 60, 0.12);
+    border-color: rgba(251, 146, 60, 0.28);
+}
+
+.stat-value-timer {
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    letter-spacing: 0.2px;
+    line-height: 1.2;
+}
+
+.stat-value-highlight {
+    display: flex;
+    align-items: baseline;
+    gap: 3px;
+    line-height: 1.2;
+}
+
+.stat-num {
+    font-size: 13px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    letter-spacing: -0.2px;
+}
+
+.stat-text-highlight {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: 0.2px;
+}
+
+.stat-unit {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.stat-tags-list {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+}
+
+.stat-tag {
+    font-size: 9px;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+    max-width: 65px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.stat-sub {
+    font-size: 9px;
+    color: var(--text-muted);
+    letter-spacing: 0.1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.2;
 }
 
 /* 双轨 2x3 选项输出网格 (根据行数动态判断高度，同行严格绝对齐平) */

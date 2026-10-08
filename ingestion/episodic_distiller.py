@@ -321,17 +321,46 @@ class EpisodicDistiller:
             except Exception:
                 pass
 
+        # 深度防重：查询 SQLite index.db 最近已沉淀的事实文本，绝不重复录入
+        db_path = os.path.join(sandbox_dir, "index.db")
+        existing_facts_corpus = ""
+        if os.path.exists(db_path):
+            try:
+                import sqlite3
+                conn = sqlite3.connect(db_path)
+                cur = conn.cursor()
+                cur.execute("SELECT facts_summary FROM episode_records ORDER BY id DESC LIMIT 30")
+                existing_facts_corpus = " ".join([r[0] for r in cur.fetchall()])
+                conn.close()
+            except Exception:
+                pass
+
+        noise_patterns = [
+            "按 Esc", "小胶囊", "点击复制", "抓取最新", "导入建档",
+            "send", "发送", "口*、心", "uu.l", "曰％", "已发出"
+        ]
+
         new_turns = []
         for t in raw_turns:
             role = t.get("role", "")
             text = t.get("text", "").strip()
             if not text or len(text) < 2:
                 continue
-            if any(k in text for k in ["按 Esc", "小胶囊", "点击复制", "抓取最新"]):
+            if any(k in text.lower() for k in noise_patterns):
                 continue
+            if not re.search(r"[\u4e00-\u9fa5a-zA-Z0-9]", text):
+                continue
+
             t_hash = hashlib.md5(f"{role}::{text}".encode("utf-8")).hexdigest()
-            if t_hash not in recorded_hashes:
-                new_turns.append((t_hash, t))
+            # 1. 检查哈希记录
+            if t_hash in recorded_hashes:
+                continue
+            # 2. 检查数据库历史事实库 (防止重启或不同客户端导致哈希失效)
+            if existing_facts_corpus and text in existing_facts_corpus:
+                recorded_hashes.add(t_hash)
+                continue
+
+            new_turns.append((t_hash, t))
 
         if not new_turns:
             return {"status": "unchanged", "new_count": 0, "last_checkpoint_time": last_checkpoint_time}

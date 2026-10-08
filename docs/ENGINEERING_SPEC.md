@@ -39,7 +39,7 @@ echolens/
 │   └── app.js                     # 纯鼠标事件驱动 (Click-to-Copy, 折叠胶囊, 视图切换)
 ├── data/                          # 单目标物理沙盒库
 │   ├── ego/                       # 【我】的全局本体
-│   │   ├── profile.md             # 小破崔核心人格底色
+│   │   ├── profile.md             # 我方核心人格底色
 │   │   └── rules.json             # 全局硬性语言防线 (逗号流、禁句号感叹号)
 │   └── contacts/                  # 独立联系人沙盒
 │       └── 示例好友/
@@ -211,7 +211,7 @@ class MultiFormatFolderScanner:
     """
     def __init__(self, target_name: str, ego_aliases: List[str] = None):
         self.target_name = target_name
-        self.ego_aliases = set(ego_aliases or ["我", "小破崔"])
+        self.ego_aliases = set(ego_aliases or ["我", "自己"])
         self.seen_signatures = set()
 
     def scan_and_normalize(self, folder_path: str) -> List[ChatMessage]:

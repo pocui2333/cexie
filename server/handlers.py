@@ -43,7 +43,8 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
                 "reply_status": service_instance.current_reply_status,
                 "sender_name": service_instance.state_machine.last_sender_name,
                 "message_time": service_instance.state_machine.last_incoming_time_str,
-                "options": service_instance.cached_options
+                "options": service_instance.cached_options,
+                "stats": service_instance.get_stats()
             })
 
         elif parsed.path == "/api/profile":
@@ -223,7 +224,10 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
             service_instance.current_context = snapshot.dialogue_context
 
             if snapshot.case_type == 1:
-                # 情况 1: 最后一条是我的回复 -> 标记为已回复，不强制重新生成推荐
+                # 情况 1: 最后一条是我的回复 -> 标记为已回复，清空下方旧推荐选项
+                service_instance.cached_options = []
+                if not getattr(service_instance, "last_outgoing_time", None):
+                    service_instance.last_outgoing_time = time.time()
                 if snapshot.ego_text and snapshot.ego_text != "暂未回复":
                     service_instance.last_outgoing_reply = snapshot.ego_text
                     service_instance.state_machine.feed_outgoing_reply(snapshot.ego_text)
@@ -238,13 +242,15 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
                     "incoming_text": service_instance.current_incoming,
                     "ego_text": service_instance.current_ego_reply,
                     "reply_status": "replied",
-                    "options": service_instance.cached_options,
+                    "options": [],
+                    "stats": service_instance.get_stats(target),
                     "message": msg_tip
                 })
 
             else:
                 # 情况 2: 最后一条不是我的回复（对方有新消息待回复）
                 # 带着上下文去命中记录知识库，生成最新的 6 档自然回复推荐！
+                service_instance.last_outgoing_time = None
                 service_instance.state_machine.feed_incoming_message(target, service_instance.current_incoming)
                 service_instance._refresh_options(target, service_instance.current_incoming, snapshot.dialogue_context)
 
@@ -259,6 +265,7 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
                     "ego_text": service_instance.current_ego_reply,
                     "reply_status": "pending",
                     "options": service_instance.cached_options,
+                    "stats": service_instance.get_stats(target),
                     "message": msg_tip
                 })
         finally:

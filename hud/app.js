@@ -19,6 +19,16 @@ class EchoLensHUD {
         this.currentFittedHeight = null;
         this.lastFittedHeight = 420;
 
+        // 自动循环抓取状态 (60秒自动轮询)
+        this.autoLoopTimer = null;
+        this.autoLoopCountdown = 60;
+        this.isAutoLooping = false;
+
+        // 统计面板与计时状态
+        this.lastReplyTimestamp = null;
+        this.statsTimerInterval = null;
+        this.lastStatsSignature = null;
+
         // 脏检查签名缓存 (Dirty Checking Caches)
         this.lastRenderedIncoming = null;
         this.lastRenderedEgo = null;
@@ -51,12 +61,31 @@ class EchoLensHUD {
 
         // 看板元素
         this.btnTriggerCapture = document.getElementById('btn-trigger-capture');
+        this.btnAutoLoop = document.getElementById('btn-auto-loop');
         this.targetSenderName = document.getElementById('target-sender-name');
         this.targetMessageTime = document.getElementById('target-message-time');
         this.incomingBox = document.getElementById('incoming-message-box');
         this.egoMessageBox = document.getElementById('ego-message-box');
         this.egoStatusBadge = document.getElementById('ego-status-badge');
         this.dualTrackGrid = document.getElementById('dual-track-grid');
+
+        // 统计面板元素
+        this.statsSection = document.getElementById('stats-section');
+        this.statsStatusTag = document.getElementById('stats-status-tag');
+        this.statEgoRatio = document.getElementById('stat-ego-ratio');
+        this.statTargetRatio = document.getElementById('stat-target-ratio');
+        this.statProgressFill = document.getElementById('stat-progress-fill');
+        this.statBalanceTip = document.getElementById('stat-balance-tip');
+        this.statBalanceDesc = document.getElementById('stat-balance-desc');
+        this.statWarmthBadge = document.getElementById('stat-warmth-badge');
+        this.statWarmthScore = document.getElementById('stat-warmth-score');
+        this.statWarmthWindow = document.getElementById('stat-warmth-window');
+        this.statWarmthFill = document.getElementById('stat-warmth-fill');
+        this.statWarmthTactic = document.getElementById('stat-warmth-tactic');
+        this.statDynamicBadge = document.getElementById('stat-dynamic-badge');
+        this.statDynamicTitle = document.getElementById('stat-dynamic-title');
+        this.statDynamicDesc = document.getElementById('stat-dynamic-desc');
+        this.statTagsContainer = document.getElementById('stat-tags-container');
 
         // 建档视图元素
         this.inputTargetName = document.getElementById('input-target-name');
@@ -105,6 +134,11 @@ class EchoLensHUD {
         // 5. 抓取最新 (500ms 快速防重节流)
         if (this.btnTriggerCapture) {
             this.btnTriggerCapture.addEventListener('click', () => this.triggerCapture());
+        }
+
+        // 5.1 自动循环抓取 (60秒循环 / 停止)
+        if (this.btnAutoLoop) {
+            this.btnAutoLoop.addEventListener('click', () => this.toggleAutoLoop());
         }
 
         // 6. 卡片点击即复制 (事件委托)
@@ -203,12 +237,68 @@ class EchoLensHUD {
     }
 
     quitApp() {
+        this.stopAutoLoop();
         fetch('/api/quit', { method: 'POST' }).catch(() => {});
         setTimeout(() => {
             try {
                 window.close();
             } catch (_) {}
         }, 120);
+    }
+
+    toggleAutoLoop() {
+        if (this.isAutoLooping) {
+            this.stopAutoLoop();
+        } else {
+            this.startAutoLoop();
+        }
+    }
+
+    startAutoLoop() {
+        this.isAutoLooping = true;
+        this.autoLoopCountdown = 60;
+        if (this.btnAutoLoop) {
+            this.btnAutoLoop.classList.add('active');
+            this.btnAutoLoop.textContent = `停止 (${this.autoLoopCountdown}s)`;
+            this.btnAutoLoop.title = '点击停止自动循环抓取';
+        }
+        // 开启时立即执行一次抓取
+        this.triggerCapture();
+
+        if (this.autoLoopTimer) {
+            clearInterval(this.autoLoopTimer);
+        }
+        this.autoLoopTimer = setInterval(() => {
+            if (!this.isAutoLooping) {
+                clearInterval(this.autoLoopTimer);
+                return;
+            }
+            this.autoLoopCountdown--;
+            if (this.autoLoopCountdown <= 0) {
+                this.autoLoopCountdown = 60;
+                if (this.btnAutoLoop) {
+                    this.btnAutoLoop.textContent = `停止 (${this.autoLoopCountdown}s)`;
+                }
+                this.triggerCapture();
+            } else {
+                if (this.btnAutoLoop) {
+                    this.btnAutoLoop.textContent = `停止 (${this.autoLoopCountdown}s)`;
+                }
+            }
+        }, 1000);
+    }
+
+    stopAutoLoop() {
+        this.isAutoLooping = false;
+        if (this.autoLoopTimer) {
+            clearInterval(this.autoLoopTimer);
+            this.autoLoopTimer = null;
+        }
+        if (this.btnAutoLoop) {
+            this.btnAutoLoop.classList.remove('active');
+            this.btnAutoLoop.textContent = '自动循环';
+            this.btnAutoLoop.title = '开启每60秒自动循环抓取';
+        }
     }
 
     copyToClipboard(text, cardElement) {
@@ -236,6 +326,14 @@ class EchoLensHUD {
         }
         this.isCapturing = true;
         this.lastCaptureTime = now;
+
+        // 若处于自动循环中，重置倒计时为 60s，避免刚手动抓完短时间内又重复抓取
+        if (this.isAutoLooping) {
+            this.autoLoopCountdown = 60;
+            if (this.btnAutoLoop) {
+                this.btnAutoLoop.textContent = `停止 (${this.autoLoopCountdown}s)`;
+            }
+        }
 
         if (this.btnTriggerCapture) {
             this.btnTriggerCapture.textContent = '抓取中...';
@@ -368,11 +466,26 @@ class EchoLensHUD {
     }
 
     startPolling() {
-        this.pollTimer = setInterval(() => {
-            if (this.currentView === 'monitor' && !this.isCollapsed) {
-                this.fetchPollData();
-            }
-        }, 1500);
+        let isWindowFocused = true;
+        window.addEventListener('focus', () => {
+            isWindowFocused = true;
+            this.fetchPollData();
+        });
+        window.addEventListener('blur', () => {
+            isWindowFocused = false;
+        });
+
+        const scheduleNext = () => {
+            // 当窗口失去焦点或处于胶囊折叠态时，拉长轮询间隔至 3500ms，极致省电省资源
+            const delay = (this.isCollapsed || !isWindowFocused) ? 3500 : 1500;
+            this.pollTimer = setTimeout(() => {
+                if (this.currentView === 'monitor') {
+                    this.fetchPollData();
+                }
+                scheduleNext();
+            }, delay);
+        };
+        scheduleNext();
     }
 
     fetchPollData() {
@@ -414,8 +527,8 @@ class EchoLensHUD {
         }
 
         // 4. 我方最新回复看板 (带脏检查)
-        const isReplied = data.reply_status === 'replied' || (data.ego_text && data.ego_text !== '暂未回复' && data.ego_text !== '无 (暂未回复)');
-        const currentEgoText = isReplied ? (data.ego_text || '已回复') : '无（暂未回复）';
+        const isReplied = data.reply_status === 'replied';
+        const currentEgoText = (data.ego_text && data.ego_text !== '暂未回复') ? data.ego_text : (isReplied ? '已回复' : '（暂无上一句发言）');
         const currentStatus = isReplied ? 'replied' : 'pending';
 
         if (currentEgoText !== this.lastRenderedEgo || currentStatus !== this.lastRenderedStatus) {
@@ -429,17 +542,25 @@ class EchoLensHUD {
                     this.egoMessageBox.className = 'ego-box';
                     this.egoMessageBox.textContent = currentEgoText;
                 } else {
-                    this.egoStatusBadge.textContent = '待回复';
+                    this.egoStatusBadge.textContent = '待我回复';
                     this.egoStatusBadge.className = 'status-badge badge-pending';
-                    this.egoMessageBox.className = 'ego-box pending-state';
-                    this.egoMessageBox.textContent = '无（暂未回复）';
+                    this.egoMessageBox.className = 'ego-box';
+                    this.egoMessageBox.textContent = currentEgoText;
                 }
             }
             this.fitWindowToContent();
         }
 
-        // 5. 双轨卡片更新 (严格脏检查：仅当 6 选项内容真正变更时重绘 DOM)
-        if (data.options && data.options.length === 6) {
+        // 5. 双轨卡片与统计看板切换 (待回复时展开推荐卡片，已回复/无推荐时展示统计看板)
+        const isRepliedTurn = data.reply_status === 'replied' || !data.options || data.options.length === 0;
+        if (isRepliedTurn) {
+            if (this.lastOptionsSignature !== '__CLEARED__') {
+                this.lastOptionsSignature = '__CLEARED__';
+                this.clearCards();
+            }
+            this.showStats(data.stats);
+        } else if (data.options && data.options.length === 6) {
+            this.hideStats();
             const newSig = data.options.map(o => `${o.slot_id}:${o.reply_text}`).join('|');
             if (newSig !== this.lastOptionsSignature) {
                 this.lastOptionsSignature = newSig;
@@ -448,12 +569,102 @@ class EchoLensHUD {
         }
     }
 
+    showStats(stats) {
+        if (!this.statsSection) return;
+        this.statsSection.style.display = 'flex';
+
+        if (stats) {
+            const sig = `${stats.today_ego_count}:${stats.today_target_count}:${stats.warmth_score}:${stats.dynamic_title}:${(stats.today_topics || []).join(',')}`;
+            if (sig !== this.lastStatsSignature) {
+                this.lastStatsSignature = sig;
+
+                // 1. 今日消息 (相互发送条数与比例)
+                const egoCnt = stats.today_ego_count || 0;
+                const tgtCnt = stats.today_target_count || 0;
+                if (this.statEgoRatio) this.statEgoRatio.textContent = `我 ${egoCnt}条 (${stats.ego_percent || 50}%)`;
+                if (this.statTargetRatio) this.statTargetRatio.textContent = `TA ${tgtCnt}条 (${stats.target_percent || 50}%)`;
+                if (this.statProgressFill) this.statProgressFill.style.width = `${stats.ego_percent || 50}%`;
+                if (this.statBalanceTip) {
+                    this.statBalanceTip.textContent = stats.msg_heat_tip || '双向互动';
+                }
+                if (this.statBalanceDesc) {
+                    this.statBalanceDesc.textContent = stats.ratio_desc || '今日互动 · 话轮均衡';
+                }
+
+                // 2. 互动热度与兴趣窗口
+                const score = (stats.warmth_score !== undefined) ? stats.warmth_score : 80;
+                if (this.statWarmthScore) this.statWarmthScore.textContent = score;
+                if (this.statWarmthBadge) {
+                    this.statWarmthBadge.textContent = stats.warmth_badge || '良好互动';
+                    if (score >= 80) {
+                        this.statWarmthBadge.className = 'stat-badge badge-amber';
+                    } else {
+                        this.statWarmthBadge.className = 'stat-badge';
+                    }
+                }
+                if (this.statWarmthWindow) this.statWarmthWindow.textContent = stats.warmth_window || '双向顺畅';
+                if (this.statWarmthFill) this.statWarmthFill.style.width = `${Math.min(100, Math.max(0, score))}%`;
+                if (this.statWarmthTactic) this.statWarmthTactic.textContent = stats.warmth_tactic || '情绪高位 · 适合顺势拉扯或邀约';
+
+                // 3. 今日动态微观分析
+                if (this.statDynamicBadge) {
+                    this.statDynamicBadge.textContent = stats.dynamic_title || '日常松弛互动';
+                }
+                if (this.statDynamicTitle) {
+                    this.statDynamicTitle.textContent = stats.dynamic_title || '日常松弛互动';
+                }
+                if (this.statDynamicDesc) {
+                    this.statDynamicDesc.textContent = stats.dynamic_desc || '老友日常碎语交流 · 氛围松弛无压力';
+                }
+
+                // 4. 今日话题焦点
+                if (this.statTagsContainer) {
+                    const tags = (stats.today_topics && stats.today_topics.length > 0) ? stats.today_topics : ['日常', '唠嗑'];
+                    this.statTagsContainer.innerHTML = tags.map(t => `<span class="stat-tag">${this.escapeHtml(t)}</span>`).join('');
+                }
+            }
+        }
+
+        this.fitWindowToContent();
+    }
+
+    hideStats() {
+        if (this.statsSection) {
+            this.statsSection.style.display = 'none';
+        }
+    }
+
+    clearCards() {
+        const dualSection = document.querySelector('.dual-track-section');
+        if (dualSection) {
+            dualSection.style.display = 'none';
+        }
+        if (this.dualTrackGrid) {
+            this.dualTrackGrid.innerHTML = '';
+        }
+        const footer = document.querySelector('.monitor-footer');
+        if (footer) {
+            footer.style.display = 'none';
+        }
+        this.fitWindowToContent(true);
+    }
+
     renderCards(options) {
         if (!options || options.length !== 6 || !this.dualTrackGrid) return;
+        this.hideStats();
+
+        const dualSection = document.querySelector('.dual-track-section');
+        if (dualSection) {
+            dualSection.style.display = '';
+        }
+        const footer = document.querySelector('.monitor-footer');
+        if (footer) {
+            footer.style.display = '';
+        }
 
         const sorted = [...options].sort((a, b) => a.slot_id - b.slot_id);
         const cardsHtml = `
-            <div class="track-header header-native">直觉原句</div>
+            <div class="track-header header-native">原生原话</div>
             <div class="track-header header-evolved">微调提升</div>
             ${sorted.map(o => {
                 const isElevated = o.slot_id >= 4;
@@ -478,8 +689,8 @@ class EchoLensHUD {
             const container = document.getElementById('main-container');
             if (!container || container.classList.contains('hidden')) return;
 
-            // 获取 main-container 的真实高度，收敛在合理界限内 (280px ~ 680px)
-            const targetH = Math.min(680, Math.max(280, Math.ceil(container.scrollHeight || container.offsetHeight)));
+            // 获取 main-container 的真实高度，收敛在合理界限内 (160px ~ 680px)
+            const targetH = Math.min(680, Math.max(160, Math.ceil(container.scrollHeight || container.offsetHeight)));
 
             // 只有当高度阶跃差距 >= 4px 时才向 Cocoa 宿主调度系统 resize，彻底消除抖动死循环
             if (force || Math.abs(targetH - (this.currentFittedHeight || 0)) >= 4) {

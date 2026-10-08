@@ -16,7 +16,7 @@ class MultiFormatFolderScanner:
     """
     def __init__(self, target_name: str, ego_aliases: List[str] = None):
         self.target_name = target_name
-        self.ego_aliases: Set[str] = set(ego_aliases or ["我", "小破崔"])
+        self.ego_aliases: Set[str] = set(ego_aliases or ["我", "自己"])
         self.seen_signatures: Set[str] = set()
 
     def _resolve_target_dir(self, folder_path: str) -> str:

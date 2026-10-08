@@ -14,7 +14,7 @@ from capture.vision_ocr import (
 from core.contracts import ChatCaptureResult
 
 def is_contact_match(detected: Optional[str], expected: Optional[str]) -> bool:
-    """核验抓取到的联系人姓名与预期目标是否匹配 (防工作群穿透)"""
+    """核验抓取到的联系人姓名与预期目标是否匹配 (防工作群穿透，容忍轻微 OCR 形近字误判)"""
     if not detected or not expected:
         return False
     d = detected.strip().lower()
@@ -23,6 +23,19 @@ def is_contact_match(detected: Optional[str], expected: Optional[str]) -> bool:
         return True
     if e in d or d in e:
         return True
+
+    # 容差模糊核验: 去掉群聊人数括号或备注空格后缀
+    clean_d = re.sub(r'[\s（\(].*$', '', d)
+    clean_e = re.sub(r'[\s（\(].*$', '', e)
+    if clean_d and clean_e:
+        if clean_d == clean_e or clean_d in clean_e or clean_e in clean_d:
+            return True
+
+        # 若名字长度 >= 2，且重合字符数占绝大部分 (如 3 字中 2 字相同)，判定为同一联系人
+        common_chars = set(clean_d) & set(clean_e)
+        if len(clean_e) >= 2 and len(common_chars) >= max(2, len(clean_e) - 1):
+            return True
+
     return False
 
 def capture_wechat_chat_context(expected_target: Optional[str] = None) -> Tuple[Optional[str], Optional[str], Optional[str], str, str]:
@@ -66,14 +79,12 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
                     is_mismatch=True
                 )
 
-        # 3. 裁剪聊天消息气泡区域 (排除底部输入框)
+        # 3. 裁剪聊天消息气泡区域 (排除底部输入框，保留 100% 原生视网膜高清分辨率，杜绝字迹笔画模糊误判)
         img = Image.open(tmp_win)
         w, h = img.size
-        crop_box = (int(w * 0.32), int(h * 0.12), int(w * 0.98), int(h * 0.88))
+        crop_box = (int(w * 0.32), int(h * 0.10), int(w * 0.98), int(h * 0.89))
         cropped = img.crop(crop_box)
-        cw, ch = cropped.size
-        downscaled = cropped.resize((cw // 2, ch // 2), Image.Resampling.BILINEAR)
-        downscaled.save(tmp_crop)
+        cropped.save(tmp_crop)
 
         # 4. 执行 OCR 并提取像素特征
         raw_obs = run_vision_ocr(tmp_crop)
@@ -155,7 +166,6 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
             # 情况 2: 如果最后一条不是我的回复（是对方的消息）
             # 找到上一次我的消息，上一次我的消息下面的所有就都是对方最新的消息，我还没回复
             case_type = 2
-            ego_text = "暂未回复"
             reply_status = "pending"
 
             # 寻找上一次我的消息 (最后一个 EGO)
@@ -178,6 +188,8 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
                 ]
                 last_ego_text = ""
 
+            # 保留我方上一句真实回复，绝不在对方来消息时清空抹除为无
+            ego_text = last_ego_text or "暂未回复"
             incoming_text = "\n".join(target_turns_below) if target_turns_below else last_text
 
         return ChatCaptureResult(
@@ -198,8 +210,10 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
 
     return ChatCaptureResult(reply_status="pending")
 
-def _filter_and_tag_bubbles(obs_list: List[dict]) -> List[tuple]:
-    """过滤杂音并打标角色 (TIME / EGO / TARGET)"""
+def _filter_and_tag_bubbles(obs_list: List[dict], ego_aliases: List[str] = None) -> List[tuple]:
+    """过滤杂音并打标角色 (TIME / EGO / TARGET / QUOTE_EGO)"""
+    alias_set = set(ego_aliases or ["我", "自己"])
+
     def is_timestamp(txt: str, x: float) -> bool:
         t = txt.strip().lower()
         if re.search(r"(\d{1,2}:\d{2})", t):
@@ -214,6 +228,7 @@ def _filter_and_tag_bubbles(obs_list: List[dict]) -> List[tuple]:
         return False
 
     elements = []
+    in_ego_quote = False
     for item in obs_list:
         txt = item["txt"]
         if is_calendar_widget(txt, item["y"], item["x"]):
@@ -222,23 +237,50 @@ def _filter_and_tag_bubbles(obs_list: List[dict]) -> List[tuple]:
             continue
         if is_timestamp(txt, item["x"]):
             elements.append(("TIME", txt, item))
+            in_ego_quote = False
         else:
             # 严格依据微信绿色气泡与靠右对齐特征判别我方发言
             is_ego = item["has_green"] or (item["r_x"] > 0.78 and item["x"] > 0.25)
-            role = "EGO" if is_ego else "TARGET"
-            elements.append((role, txt, item))
+            if is_ego:
+                elements.append(("EGO", txt, item))
+                in_ego_quote = False
+            else:
+                # 对方气泡内检测是否在引用我方发言 (例如: 我方：我记得...)
+                m = re.match(r"^([^\n：]{1,8})：(.*)", txt)
+                if m and m.group(1).strip() in alias_set:
+                    in_ego_quote = True
+                    quoted_body = m.group(2).strip()
+                    if quoted_body:
+                        elements.append(("QUOTE_EGO", quoted_body, item))
+                    continue
+                elif in_ego_quote:
+                    # 微信引用气泡内部通常只有1~2行紧凑文字，若出现新起头词则回归对方正文
+                    if any(txt.startswith(k) for k in ["是啊", "对啊", "哈哈", "我也", "不过", "但是", "确实", "主要是", "没啊", "好的", "行啊"]) or txt.endswith(("。", "！", "？", "!", "?", "，")):
+                        in_ego_quote = False
+                        elements.append(("TARGET", txt, item))
+                    else:
+                        elements.append(("QUOTE_EGO", txt, item))
+                        in_ego_quote = False
+                else:
+                    elements.append(("TARGET", txt, item))
     return elements
 
 def _group_turns(elements: List[tuple]) -> List[Dict[str, Any]]:
-    """聚合连击短气泡并智能合并中文折行长句，关联时间戳"""
+    """聚合连击短气泡并智能合并中文折行长句，关联时间戳，剥离引用污染"""
     grouped = []
     current_role = None
     current_lines = []
     current_time_hint = None
+    current_quote = []
 
     for role, txt, _ in elements:
         if role == "TIME":
             current_time_hint = txt
+            continue
+
+        # 我方被引用的文字单独作为引用资产记录，绝不污染对方说话正文
+        if role == "QUOTE_EGO":
+            current_quote.append(txt)
             continue
 
         if role != current_role:
@@ -246,8 +288,10 @@ def _group_turns(elements: List[tuple]) -> List[Dict[str, Any]]:
                 grouped.append({
                     "role": current_role,
                     "text": "\n".join(current_lines),
-                    "time_hint": current_time_hint
+                    "time_hint": current_time_hint,
+                    "quote": "\n".join(current_quote) if current_quote else None
                 })
+                current_quote = []
             current_role = role
             current_lines = [txt]
         else:
@@ -265,7 +309,8 @@ def _group_turns(elements: List[tuple]) -> List[Dict[str, Any]]:
         grouped.append({
             "role": current_role,
             "text": "\n".join(current_lines),
-            "time_hint": current_time_hint
+            "time_hint": current_time_hint,
+            "quote": "\n".join(current_quote) if current_quote else None
         })
 
     return grouped
