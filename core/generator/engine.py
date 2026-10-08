@@ -62,6 +62,57 @@ class DualTrackGenerator:
             options=options
         )
 
+    def _filter_positive_neutral_by_ai(self, items: List[str]) -> List[str]:
+        """
+        AI 动态情感与社交倾向过滤 (不设静态词表，完全交由大模型语义裁决):
+        - 判定为【负向】（抱怨、扫兴、挑刺、泼冷水、消极摆烂、刻薄、烦躁、攻击性）坚决过滤剔除
+        - 仅保留【正向】（夸奖、赞许、幽默打趣、支持）与【中性】（日常分享、随性交流、就事论事）的句子
+        """
+        if not items or not config.LLM_API_KEY:
+            return items
+
+        try:
+            import urllib.request
+            import ssl
+            prompt = (
+                "请对以下历史聊天句子进行情感与社交倾向判断。\n"
+                "AI 任务：如果句子带有【负向】倾向（包括抱怨、扫兴、挑刺、泼冷水、消极摆烂、刻薄、烦躁、攻击性），将其判定为负向并过滤剔除；\n"
+                "只保留【正向】（夸奖、赞许、幽默打趣、支持）或【中性】（日常分享、随性交流、就事论事）的句子。\n\n"
+                "待判断句子：\n" +
+                "\n".join([f"{i+1}. {txt}" for i, txt in enumerate(items)]) +
+                "\n\n请严格以 JSON 数组形式只返回通过筛选（正向或中性）的原始句子序号，格式如：[1, 3, 5]"
+            )
+            url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {config.LLM_API_KEY}"
+            }
+            body = {
+                "model": config.LLM_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "max_tokens": 100
+            }
+            req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
+            try:
+                import certifi
+                ctx = ssl.create_default_context(cafile=certifi.where())
+            except Exception:
+                ctx = ssl._create_unverified_context()
+
+            with urllib.request.urlopen(req, context=ctx, timeout=6.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                content = data["choices"][0]["message"]["content"].strip()
+                m = re.search(r"\[\s*(?:\d+\s*,\s*)*\d*\s*\]", content)
+                if m:
+                    indices = json.loads(m.group(0))
+                    valid = [items[i - 1] for i in indices if 1 <= i <= len(items)]
+                    return valid
+        except Exception as e:
+            print(f"[AI Sentiment Filter Warning] {e}")
+
+        return items
+
     def _load_recent_ego_utterances(self, target_name: str, limit: int = 8) -> List[str]:
         db_path = os.path.join(self.contacts_dir, target_name, "index.db")
         if not os.path.exists(db_path):
@@ -82,20 +133,32 @@ class DualTrackGenerator:
                     cleaned = m.strip()
                     if cleaned and cleaned not in results and 2 <= len(cleaned) <= 60 and "暂未回复" not in cleaned:
                         results.append(cleaned)
-                        if len(results) >= limit:
+                        if len(results) >= limit * 2:
                             break
-                if len(results) >= limit:
+                if len(results) >= limit * 2:
                     break
             conn.close()
         except Exception:
             pass
+
+        # 在检索步骤的结尾，由 AI 判定并过滤掉负向句子，仅保留正向与中性原话
+        if results:
+            filtered = self._filter_positive_neutral_by_ai(results)
+            return filtered[:limit]
         return results
 
     def _load_qa_snippets(self, target_name: str, incoming_text: str, limit: int = 3) -> List[Dict[str, str]]:
         try:
             from core.memory import EntityMemoryRetriever
             retriever = EntityMemoryRetriever(self.contacts_dir)
-            return retriever.retrieve_qa_scene_snippets(target_name, incoming_text, limit=limit)
+            raw_snippets = retriever.retrieve_qa_scene_snippets(target_name, incoming_text, limit=limit * 2)
+            if not raw_snippets:
+                return []
+            # 在问答切片检索结尾，提取我方的真实回答交给 AI 过滤，负向回答直接剔除
+            ego_replies = [s["ego_replied"] for s in raw_snippets]
+            valid_replies = set(self._filter_positive_neutral_by_ai(ego_replies))
+            clean_snippets = [s for s in raw_snippets if s["ego_replied"] in valid_replies]
+            return clean_snippets[:limit]
         except Exception as e:
             print(f"[Load QA Snippets Error] {e}")
             return []

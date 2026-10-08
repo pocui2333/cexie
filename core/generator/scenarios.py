@@ -15,9 +15,9 @@ def synthesize_scenario_options(
     qa_snippets: Optional[List[Dict[str, str]]] = None
 ) -> List[Dict[str, str]]:
     # 优先复用历史类似提问下我方的真实回答（若有）
-    u1 = "确实是这么个理，按你自己最顺手的节奏对付就完事了"
-    u2 = "我平时也差不多这样，怎么省心怎么来，不折腾自己"
-    u3 = "先把眼前事对付明白，回头该吃吃该歇歇"
+    u1 = "挺好的，怎么顺心怎么整，自己开心最重要"
+    u2 = "我平时也差不多这样，按自己喜欢的节奏来最得劲"
+    u3 = "先把眼前事忙明白，回头好好犒劳一下自己"
 
     if qa_snippets:
         if len(qa_snippets) >= 1 and qa_snippets[0].get("ego_replied"):
@@ -35,10 +35,10 @@ def synthesize_scenario_options(
             u3 = ego_utterances[2]
 
     return [
-        {"sub_goal": "原生原话", "text": u1, "rationale": "基于历史发言习惯与真实性格的第一反应原话"},
-        {"sub_goal": "原生原话", "text": u2, "rationale": "贴合性格底色的真实大白话回复"},
-        {"sub_goal": "原生原话", "text": u3, "rationale": "随性直白的生活大白话候选"},
-        {"sub_goal": "幽默接梗", "text": "哈哈哈哈你这路子挺稳妥的，突出一个省心踏实", "rationale": "基于原话微调：打趣老友日常节奏"},
-        {"sub_goal": "情绪撑腰", "text": "犯不上自己跟自己较劲，咋得劲咋整就完事了，不用在意外面怎么说", "rationale": "基于原话微调：给足做自己底气与护短"},
-        {"sub_goal": "互动推进", "text": "今天先把手头事理顺，有啥新情况随时发来唠唠", "rationale": "基于原话微调：开放式生活分享邀请"}
+        {"sub_goal": "原生原话", "text": u1, "rationale": "顺着对方当下的快乐点肯定，接住分享欲"},
+        {"sub_goal": "原生原话", "text": u2, "rationale": "接地气生活大白话同频畅聊"},
+        {"sub_goal": "原生原话", "text": u3, "rationale": "顺着话题好奇延展一个小点激发后续互动"},
+        {"sub_goal": "幽默接梗", "text": "哈哈哈哈你这吃法挺有想法的，直接把快乐拉满了", "rationale": "在原话基础上融入生动画面感逗乐对方"},
+        {"sub_goal": "情绪撑腰", "text": "开心最要紧，咋舒服咋整就完事了，不用在意外面怎么说", "rationale": "无条件偏袒夸奖与宠溺消除顾虑"},
+        {"sub_goal": "互动推进", "text": "下回也带我整一回，我负责买单你负责带路", "rationale": "在原话基础上自然提出共同体验与陪伴"}
     ]
