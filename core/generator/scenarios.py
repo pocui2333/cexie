@@ -11,14 +11,22 @@ def synthesize_scenario_options(
     memory: List[Dict[str, Any]],
     rules: Dict[str, Any],
     context_text: Optional[str] = None,
-    ego_utterances: Optional[List[str]] = None
+    ego_utterances: Optional[List[str]] = None,
+    qa_snippets: Optional[List[Dict[str, str]]] = None
 ) -> List[Dict[str, str]]:
-    # 优先复用我方在历史记录中说过的真实大白话（若有）
+    # 优先复用历史类似提问下我方的真实回答（若有）
     u1 = "确实是这么个理，按你自己最顺手的节奏对付就完事了"
     u2 = "我平时也差不多这样，怎么省心怎么来，不折腾自己"
     u3 = "先把眼前事对付明白，回头该吃吃该歇歇"
 
-    if ego_utterances:
+    if qa_snippets:
+        if len(qa_snippets) >= 1 and qa_snippets[0].get("ego_replied"):
+            u1 = qa_snippets[0]["ego_replied"]
+        if len(qa_snippets) >= 2 and qa_snippets[1].get("ego_replied"):
+            u2 = qa_snippets[1]["ego_replied"]
+        if len(qa_snippets) >= 3 and qa_snippets[2].get("ego_replied"):
+            u3 = qa_snippets[2]["ego_replied"]
+    elif ego_utterances:
         if len(ego_utterances) >= 1:
             u1 = ego_utterances[0]
         if len(ego_utterances) >= 2:

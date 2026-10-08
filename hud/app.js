@@ -237,7 +237,9 @@ class EchoLensHUD {
     }
 
     quitApp() {
-        this.stopAutoLoop();
+        if (this.isAutoLooping) {
+            this.toggleAutoLoop();
+        }
         fetch('/api/quit', { method: 'POST' }).catch(() => {});
         setTimeout(() => {
             try {
@@ -247,54 +249,24 @@ class EchoLensHUD {
     }
 
     toggleAutoLoop() {
+        const nextState = !this.isAutoLooping;
+        fetch('/api/autoloop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: nextState })
+        }).then(r => r.json()).then(data => {
+            this.isAutoLooping = !!data.auto_loop_enabled;
+            this.updateAutoLoopButton(data.auto_loop_countdown);
+        }).catch(() => {});
+    }
+
+    updateAutoLoopButton(countdown) {
+        if (!this.btnAutoLoop) return;
         if (this.isAutoLooping) {
-            this.stopAutoLoop();
-        } else {
-            this.startAutoLoop();
-        }
-    }
-
-    startAutoLoop() {
-        this.isAutoLooping = true;
-        this.autoLoopCountdown = 60;
-        if (this.btnAutoLoop) {
             this.btnAutoLoop.classList.add('active');
-            this.btnAutoLoop.textContent = `停止 (${this.autoLoopCountdown}s)`;
+            this.btnAutoLoop.textContent = `停止 (${countdown || 60}s)`;
             this.btnAutoLoop.title = '点击停止自动循环抓取';
-        }
-        // 开启时立即执行一次抓取
-        this.triggerCapture();
-
-        if (this.autoLoopTimer) {
-            clearInterval(this.autoLoopTimer);
-        }
-        this.autoLoopTimer = setInterval(() => {
-            if (!this.isAutoLooping) {
-                clearInterval(this.autoLoopTimer);
-                return;
-            }
-            this.autoLoopCountdown--;
-            if (this.autoLoopCountdown <= 0) {
-                this.autoLoopCountdown = 60;
-                if (this.btnAutoLoop) {
-                    this.btnAutoLoop.textContent = `停止 (${this.autoLoopCountdown}s)`;
-                }
-                this.triggerCapture();
-            } else {
-                if (this.btnAutoLoop) {
-                    this.btnAutoLoop.textContent = `停止 (${this.autoLoopCountdown}s)`;
-                }
-            }
-        }, 1000);
-    }
-
-    stopAutoLoop() {
-        this.isAutoLooping = false;
-        if (this.autoLoopTimer) {
-            clearInterval(this.autoLoopTimer);
-            this.autoLoopTimer = null;
-        }
-        if (this.btnAutoLoop) {
+        } else {
             this.btnAutoLoop.classList.remove('active');
             this.btnAutoLoop.textContent = '自动循环';
             this.btnAutoLoop.title = '开启每60秒自动循环抓取';
@@ -501,6 +473,12 @@ class EchoLensHUD {
         // 目标不符安全提示
         if (data.status === 'mismatch') {
             return;
+        }
+
+        // 后端循环抓取状态同步
+        if (data.auto_loop_enabled !== undefined) {
+            this.isAutoLooping = !!data.auto_loop_enabled;
+            this.updateAutoLoopButton(data.auto_loop_countdown);
         }
 
         // 1. 目标联系人名称展示

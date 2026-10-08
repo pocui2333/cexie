@@ -44,7 +44,9 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
                 "sender_name": service_instance.state_machine.last_sender_name,
                 "message_time": service_instance.state_machine.last_incoming_time_str,
                 "options": service_instance.cached_options,
-                "stats": service_instance.get_stats()
+                "stats": service_instance.get_stats(),
+                "auto_loop_enabled": service_instance.auto_loop_enabled,
+                "auto_loop_countdown": service_instance.auto_loop_countdown
             })
 
         elif parsed.path == "/api/profile":
@@ -116,6 +118,12 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
 
         elif parsed.path == "/api/trigger":
             self._handle_trigger(payload)
+
+        elif parsed.path == "/api/autoloop":
+            enabled = payload.get("enabled", not service_instance.auto_loop_enabled)
+            interval = payload.get("interval", 60)
+            res = service_instance.set_auto_loop(enabled, interval)
+            self._send_json(res)
 
         elif parsed.path == "/api/inject_options":
             options = payload.get("options", [])

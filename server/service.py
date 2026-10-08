@@ -93,6 +93,13 @@ class EchoLensService:
         self.worker_thread = threading.Thread(target=self._background_worker, daemon=True)
         self.worker_thread.start()
 
+        # 后端后台自动循环抓取守护线程 (彻底免受 WKWebView 休眠冻结影响)
+        self.auto_loop_enabled: bool = False
+        self.auto_loop_interval: int = 60
+        self.auto_loop_countdown: int = 60
+        self._auto_loop_thread = threading.Thread(target=self._auto_loop_worker, daemon=True)
+        self._auto_loop_thread.start()
+
     def _init_active_context(self):
         """尝试读取微信当前活跃窗口与消息"""
         try:
@@ -165,6 +172,58 @@ class EchoLensService:
         self.recorded_signatures.add(sig)
         print(f"[EchoLens Memory] 已即时沉淀长期记忆: {res.get('theme', '')} (涉及 {len(messages)} 条消息)")
         return True
+
+    def _auto_loop_worker(self):
+        """Python 后端自运转循环抓取线程 (彻底免疫系统与前端节电休眠)"""
+        while True:
+            time.sleep(1.0)
+            if self.auto_loop_enabled:
+                self.auto_loop_countdown -= 1
+                if self.auto_loop_countdown <= 0:
+                    self.auto_loop_countdown = self.auto_loop_interval
+                    try:
+                        self.trigger_capture_silent()
+                    except Exception as e:
+                        print(f"[Auto Loop Background Error] {e}")
+
+    def set_auto_loop(self, enabled: bool, interval: int = 60) -> dict:
+        self.auto_loop_enabled = enabled
+        self.auto_loop_interval = max(10, interval)
+        self.auto_loop_countdown = self.auto_loop_interval
+        return {
+            "status": "success",
+            "auto_loop_enabled": self.auto_loop_enabled,
+            "auto_loop_countdown": self.auto_loop_countdown
+        }
+
+    def trigger_capture_silent(self):
+        """静默执行单次抓取与状态驱动"""
+        target = self.state_machine.active_target or get_default_target()
+        from capture.wechat_driver import capture_chat_snapshot
+        snapshot = capture_chat_snapshot(expected_target=target)
+        if snapshot.is_mismatch or not snapshot.incoming_text:
+            return
+
+        self.current_incoming = snapshot.incoming_text
+        self.current_ego_reply = snapshot.ego_text or "暂未回复"
+        self.current_reply_status = snapshot.reply_status
+        self.current_context = snapshot.dialogue_context
+
+        if snapshot.case_type == 1:
+            self.cached_options = []
+            if not getattr(self, "last_outgoing_time", None):
+                self.last_outgoing_time = time.time()
+            if snapshot.ego_text and snapshot.ego_text != "暂未回复":
+                self.last_outgoing_reply = snapshot.ego_text
+                self.state_machine.feed_outgoing_reply(snapshot.ego_text)
+        else:
+            self.last_outgoing_time = None
+            self.state_machine.feed_incoming_message(target, self.current_incoming)
+            self._refresh_options(target, self.current_incoming, snapshot.dialogue_context)
+
+        # 录入事实流
+        if snapshot.raw_turns:
+            self.distiller.distill_and_archive_turns(target, snapshot.raw_turns, time_hint=snapshot.time_hint)
 
     def _refresh_options(self, target_name: str, incoming_text: str, context_text: Optional[str] = None):
         if self.current_reply_status == "replied":

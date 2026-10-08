@@ -80,7 +80,8 @@ def build_user_prompt(
     memory: List[Dict[str, Any]],
     context_text: Optional[str] = None,
     target_dossier: Optional[str] = None,
-    ego_utterances: Optional[List[str]] = None
+    ego_utterances: Optional[List[str]] = None,
+    qa_snippets: Optional[List[Dict[str, str]]] = None
 ) -> str:
     ctx_section = f"【最近多轮对话上下文】:\n{context_text}\n\n" if context_text else ""
     mem_section = ""
@@ -88,10 +89,17 @@ def build_user_prompt(
         items = [f"- {m.get('date', '')}: {m.get('facts', '')}" for m in memory]
         mem_section = f"【检索到的相关背景记忆】:\n" + "\n".join(items) + "\n\n"
 
+    qa_section = ""
+    if qa_snippets:
+        items = []
+        for idx, snip in enumerate(qa_snippets, start=1):
+            items.append(f"  [场景切片 {idx}]:\n    TA 曾说: \"{snip.get('target_said', '')}\"\n    我方当时真实回复: \"{snip.get('ego_replied', '')}\"")
+        qa_section = "【历史相似问答场景切片 (极其关键：这是我方在类似提问下的真实回答，请重点参考当年的态度、口吻与反应)】:\n" + "\n\n".join(items) + "\n\n"
+
     ego_section = ""
     if ego_utterances:
-        samples = [f"  - 我方真实发言示例: \"{u}\"" for u in ego_utterances[:8]]
-        ego_section = f"【我方对该好友历史真实发言风格切片 (Few-Shot 真实样本，必须严格以此风格、长度、节奏为基准，就事论事绝不使用网络烂梗)】:\n" + "\n".join(samples) + "\n\n"
+        samples = [f"  - 我方真实发言示例: \"{u}\"" for u in ego_utterances[:6]]
+        ego_section = f"【我方对该好友历史真实发言风格切片 (语气与大白话底色参考)】:\n" + "\n".join(samples) + "\n\n"
 
-    return f"{ctx_section}{mem_section}{ego_section}【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n请按照我方真实说话习惯，就事论事直接回复，结合知识库规则，输出 6 个选项的严格 JSON 数组，严禁任何 markdown 解释或代码块包裹。"
+    return f"{ctx_section}{mem_section}{qa_section}{ego_section}【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n请按照我方真实说话习惯，就事论事直接回复，结合知识库规则，输出 6 个选项的严格 JSON 数组，严禁任何 markdown 解释或代码块包裹。"
 

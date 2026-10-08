@@ -79,10 +79,35 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
                     is_mismatch=True
                 )
 
-        # 3. 裁剪聊天消息气泡区域 (排除底部输入框，保留 100% 原生视网膜高清分辨率，杜绝字迹笔画模糊误判)
+def detect_input_divider_y(img: Image.Image) -> int:
+    """动态扫描微信聊天气泡区与输入框之间的水平物理分割线纵坐标 (跨屏幕与分辨率自适应)"""
+    w, h = img.size
+    x_start = int(w * 0.35)
+    x_end = int(w * 0.90)
+    # 扫描窗口 55% ~ 82% 高度范围
+    for y in range(int(h * 0.55), int(h * 0.82)):
+        pixels = [img.getpixel((x, y))[:3] for x in range(x_start, x_end, 6)]
+        r_vals = [p[0] for p in pixels]
+        g_vals = [p[1] for p in pixels]
+        b_vals = [p[2] for p in pixels]
+        avg_r = sum(r_vals) / len(r_vals)
+        avg_g = sum(g_vals) / len(g_vals)
+        avg_b = sum(b_vals) / len(b_vals)
+        var = sum((r - avg_r)**2 + (g - avg_g)**2 + (b - avg_b)**2 for r, g, b in pixels) / len(pixels)
+        if var < 15:  # 纯色水平横线特征
+            p_above = img.getpixel((int(w * 0.5), y - 2))[:3]
+            p_curr = img.getpixel((int(w * 0.5), y))[:3]
+            diff = sum(abs(a - b) for a, b in zip(p_above, p_curr))
+            if diff > 15:
+                return y
+    return int(h * 0.73)  # 兜底安全边界
+
+        # 3. 动态自适应裁剪聊天消息气泡区域 (精准停在输入框分割线上方，跨屏幕与分辨率自适应)
         img = Image.open(tmp_win)
         w, h = img.size
-        crop_box = (int(w * 0.32), int(h * 0.10), int(w * 0.98), int(h * 0.89))
+        divider_y = detect_input_divider_y(img)
+        crop_bottom = min(divider_y - 2, int(h * 0.74))
+        crop_box = (int(w * 0.32), int(h * 0.09), int(w * 0.98), crop_bottom)
         cropped = img.crop(crop_box)
         cropped.save(tmp_crop)
 
@@ -212,57 +237,57 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
 
 def _filter_and_tag_bubbles(obs_list: List[dict], ego_aliases: List[str] = None) -> List[tuple]:
     """过滤杂音并打标角色 (TIME / EGO / TARGET / QUOTE_EGO)"""
-    alias_set = set(ego_aliases or ["我", "自己"])
-
-    def is_timestamp(txt: str, x: float) -> bool:
-        t = txt.strip().lower()
-        if re.search(r"(\d{1,2}:\d{2})", t):
-            return True
-        if any(k in t for k in ["yesterday", "today", "昨天", "今天", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]) and 0.15 <= x <= 0.85:
-            return True
-        return False
-
-    def is_calendar_widget(txt: str, y: float, x: float) -> bool:
-        if y > 0.80 and (re.search(r"\d{1,2}/\d{2}", txt) or any(k in txt for k in ["周", "陶", "尚"]) or x < 0.20):
-            return True
-        return False
+    noise_keywords = [
+        "send", "发送", "按 enter", "ctrl+enter", "按 esc", "小胶囊", "点击复制",
+        "抓取最新", "导入建档", "④", "口*、心", "uu.l", "曰％", "已发出"
+    ]
 
     elements = []
-    in_ego_quote = False
+    in_quote = False
+
     for item in obs_list:
-        txt = item["txt"]
-        if is_calendar_widget(txt, item["y"], item["x"]):
+        txt = item["txt"].strip()
+        low = txt.lower()
+
+        # 1. 强特征语义过滤：绝对排除输入框按钮词与无意义乱码
+        if any(k in low for k in noise_keywords):
             continue
-        if len(txt) <= 1 and not re.match(r"[\u4e00-\u9fa5]", txt):
+        if not re.search(r"[\u4e00-\u9fa5a-zA-Z0-9]", txt):
             continue
-        if is_timestamp(txt, item["x"]):
+        # 过滤底部单字或残损标点
+        if len(txt) == 1 and item["y"] < 0.15:
+            continue
+
+        # 2. 时间戳与系统日期判定
+        if re.search(r"(\d{1,2}:\d{2})", txt) and 0.22 <= item["x"] <= 0.78:
             elements.append(("TIME", txt, item))
-            in_ego_quote = False
+            in_quote = False
+            continue
+
+        # 3. 角色判定：绿色气泡或靠右对齐严格判定为我方 (EGO)
+        is_ego = item["has_green"] or (item["r_x"] > 0.75 and item["x"] > 0.12)
+        if is_ego:
+            elements.append(("EGO", txt, item))
+            in_quote = False
         else:
-            # 严格依据微信绿色气泡与靠右对齐特征判别我方发言
-            is_ego = item["has_green"] or (item["r_x"] > 0.78 and item["x"] > 0.25)
-            if is_ego:
-                elements.append(("EGO", txt, item))
-                in_ego_quote = False
-            else:
-                # 对方气泡内检测是否在引用我方发言 (例如: 我方：我记得...)
-                m = re.match(r"^([^\n：]{1,8})：(.*)", txt)
-                if m and m.group(1).strip() in alias_set:
-                    in_ego_quote = True
-                    quoted_body = m.group(2).strip()
-                    if quoted_body:
-                        elements.append(("QUOTE_EGO", quoted_body, item))
+            # 4. 对方 (TARGET) 气泡内引用判定 (单聊中任何 `xxx：` 均为对方引用我方发言)
+            m = re.match(r"^([^\n：:]{1,16})[：:](.*)", txt)
+            if m:
+                in_quote = True
+                quoted_body = m.group(2).strip()
+                elements.append(("QUOTE_EGO", quoted_body or txt, item))
+                continue
+            elif in_quote:
+                # 引用块通常较短且为前置引用
+                if item["w"] < 0.50 and not any(txt.startswith(k) for k in ["要么", "但是", "不过", "其实", "而且", "主要是", "哈哈", "是啊", "对啊"]):
+                    elements.append(("QUOTE_EGO", txt, item))
                     continue
-                elif in_ego_quote:
-                    # 微信引用气泡内部通常只有1~2行紧凑文字，若出现新起头词则回归对方正文
-                    if any(txt.startswith(k) for k in ["是啊", "对啊", "哈哈", "我也", "不过", "但是", "确实", "主要是", "没啊", "好的", "行啊"]) or txt.endswith(("。", "！", "？", "!", "?", "，")):
-                        in_ego_quote = False
-                        elements.append(("TARGET", txt, item))
-                    else:
-                        elements.append(("QUOTE_EGO", txt, item))
-                        in_ego_quote = False
                 else:
+                    in_quote = False
                     elements.append(("TARGET", txt, item))
+            else:
+                elements.append(("TARGET", txt, item))
+
     return elements
 
 def _group_turns(elements: List[tuple]) -> List[Dict[str, Any]]:

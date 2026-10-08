@@ -33,16 +33,17 @@ class DualTrackGenerator:
         rules = self._load_rules(target_name)
         text_clean = incoming_text.strip()
         ego_utterances = self._load_recent_ego_utterances(target_name)
+        qa_snippets = self._load_qa_snippets(target_name, text_clean)
 
         options_data = None
         if config.LLM_API_KEY:
             try:
-                options_data = self._call_llm(target_name, text_clean, memory_episodes, rules, context_text, ego_utterances)
+                options_data = self._call_llm(target_name, text_clean, memory_episodes, rules, context_text, ego_utterances, qa_snippets)
             except Exception as e:
                 print(f"[LLM Generate Error] {e}")
 
         if not options_data or len(options_data) != 6:
-            options_data = synthesize_scenario_options(target_name, text_clean, memory_episodes, rules, context_text, ego_utterances)
+            options_data = synthesize_scenario_options(target_name, text_clean, memory_episodes, rules, context_text, ego_utterances, qa_snippets)
 
         options: List[GenerationOption] = []
         for idx, item in enumerate(options_data, start=1):
@@ -90,6 +91,15 @@ class DualTrackGenerator:
             pass
         return results
 
+    def _load_qa_snippets(self, target_name: str, incoming_text: str, limit: int = 3) -> List[Dict[str, str]]:
+        try:
+            from core.memory import EntityMemoryRetriever
+            retriever = EntityMemoryRetriever(self.contacts_dir)
+            return retriever.retrieve_qa_scene_snippets(target_name, incoming_text, limit=limit)
+        except Exception as e:
+            print(f"[Load QA Snippets Error] {e}")
+            return []
+
     def _call_llm(
         self,
         target_name: str,
@@ -97,7 +107,8 @@ class DualTrackGenerator:
         memory: List[Dict[str, Any]],
         rules: Dict[str, Any],
         context_text: Optional[str] = None,
-        ego_utterances: Optional[List[str]] = None
+        ego_utterances: Optional[List[str]] = None,
+        qa_snippets: Optional[List[Dict[str, str]]] = None
     ) -> Optional[List[Dict[str, str]]]:
         import ssl
         try:
@@ -110,7 +121,7 @@ class DualTrackGenerator:
         target_dossier = self._load_target_dossier(target_name)
 
         system_prompt = build_system_prompt(target_name, rules, ego_profile, target_dossier)
-        user_prompt = build_user_prompt(incoming_text, memory, context_text, target_dossier, ego_utterances)
+        user_prompt = build_user_prompt(incoming_text, memory, context_text, target_dossier, ego_utterances, qa_snippets)
 
         url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"
         headers = {

@@ -114,3 +114,78 @@ class EntityMemoryRetriever:
             pass
         return results
 
+    def retrieve_qa_scene_snippets(
+        self,
+        target_name: str,
+        incoming_text: str,
+        limit: int = 3
+    ) -> List[Dict[str, str]]:
+        """
+        问答场景切片检索 (Conversational Q-A Snippet Retrieval):
+        - 针对对方发来的问题或话题，检索历史记录中对方曾提出的类似问题/发言;
+        - 精准提取当时紧随其后【我方的真实应答切片】 (TA说 -> 我答);
+        - 组装为多轮问答对话切片作为 Few-Shot 样本，使 AI 拥有我方对该话题的真实回答基准。
+        """
+        sandbox_dir = os.path.join(self.contacts_dir, target_name)
+        db_path = os.path.join(sandbox_dir, "index.db")
+        if not os.path.exists(db_path):
+            return []
+
+        snippets = []
+        try:
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+
+            # 提取核心语义词汇
+            clean_in = re.sub(r"[，。！？\s\n]+", " ", incoming_text).strip()
+            keywords = [w for w in re.findall(r"[\u4e00-\u9fa5]{2,6}", clean_in) if w not in ["这个", "那个", "怎么", "什么", "觉得", "感觉", "这样", "那样"]]
+
+            matched_summaries = []
+            if keywords:
+                for kw in keywords[:4]:
+                    cur.execute(
+                        "SELECT facts_summary FROM episode_records WHERE facts_summary LIKE ? ORDER BY id DESC LIMIT 5",
+                        (f"%{kw}%",)
+                    )
+                    for r in cur.fetchall():
+                        if r[0] not in matched_summaries:
+                            matched_summaries.append(r[0])
+
+            if not matched_summaries:
+                cur.execute("SELECT facts_summary FROM episode_records ORDER BY id DESC LIMIT 5")
+                for r in cur.fetchall():
+                    matched_summaries.append(r[0])
+
+            conn.close()
+
+            # 从 facts_summary 中解包连贯的 [TA说 -> 我答] 场景切片
+            for summary in matched_summaries:
+                lines = [l.strip() for l in re.split(r"[;\n]", summary) if l.strip()]
+                for i in range(len(lines) - 1):
+                    curr_line = lines[i]
+                    next_line = lines[i + 1]
+
+                    is_target = curr_line.startswith(f"{target_name}:") or curr_line.startswith("TA:") or curr_line.startswith("对方:")
+                    is_ego = next_line.startswith("我:") or next_line.startswith("我方:")
+
+                    if is_target and is_ego:
+                        target_msg = re.sub(r"^[^:]+:\s*", "", curr_line).strip()
+                        ego_msg = re.sub(r"^[^:]+:\s*", "", next_line).strip()
+
+                        if len(target_msg) >= 2 and len(ego_msg) >= 2 and "暂未回复" not in ego_msg:
+                            pair = {
+                                "target_said": target_msg,
+                                "ego_replied": ego_msg
+                            }
+                            if pair not in snippets:
+                                snippets.append(pair)
+                                if len(snippets) >= limit:
+                                    break
+                if len(snippets) >= limit:
+                    break
+
+        except Exception as e:
+            print(f"[QA Snippet Retrieval Error] {e}")
+
+        return snippets
+
