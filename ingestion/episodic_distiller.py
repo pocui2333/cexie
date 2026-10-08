@@ -51,6 +51,41 @@ class EpisodicDistiller:
             "facts_count": len(episode.facts)
         }
 
+    def distill_and_archive_turns(
+        self,
+        target_name: str,
+        raw_turns: List[Dict[str, Any]],
+        time_hint: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """将实时捕获的轮次消息 (raw_turns) 转化为事件并安全写入脱水事实流 (带去重与防抖)"""
+        if not raw_turns or not target_name:
+            return {"status": "empty_turns"}
+
+        sandbox_dir = os.path.join(self.contacts_dir, target_name)
+        if not os.path.exists(sandbox_dir):
+            return {"status": "contact_sandbox_not_found"}
+
+        messages = []
+        now = datetime.now()
+        for t in raw_turns:
+            role = t.get("role", "TARGET")
+            txt = t.get("text", "").strip()
+            if not txt or len(txt) < 2:
+                continue
+            is_ego = (role == "EGO")
+            sender = "我" if is_ego else target_name
+            messages.append(ChatMessage(
+                sender_name=sender,
+                role="me" if is_ego else "target",
+                content=txt,
+                timestamp=now
+            ))
+        if not messages:
+            return {"status": "no_valid_messages"}
+
+        # 使用 distill_history_stream 自动去重 (基于 md5 hash 校验 checkpoint.json，避免每分钟轮询重复录入)
+        return self.distill_history_stream(target_name, messages, session_gap_seconds=3600)
+
     def distill_history_stream(
         self,
         target_name: str,
