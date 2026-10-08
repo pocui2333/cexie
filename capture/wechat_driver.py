@@ -52,28 +52,43 @@ def capture_wechat_chat_context(expected_target: Optional[str] = None) -> Tuple[
         res.dialogue_context
     )
 
-def detect_input_divider_y(img: Image.Image) -> int:
-    """动态扫描微信聊天气泡区与输入框之间的水平物理分割线纵坐标 (跨屏幕与分辨率自适应)"""
+def detect_chat_left_x(img: Image.Image) -> int:
+    """动态扫描左侧联系人列表与右侧主聊天面板之间的垂直物理分割线 (跨屏幕与窗口缩放自适应)"""
     w, h = img.size
-    x_start = int(w * 0.35)
-    x_end = int(w * 0.90)
-    # 扫描窗口 55% ~ 82% 高度范围
-    for y in range(int(h * 0.55), int(h * 0.82)):
-        pixels = [img.getpixel((x, y))[:3] for x in range(x_start, x_end, 6)]
-        r_vals = [p[0] for p in pixels]
-        g_vals = [p[1] for p in pixels]
-        b_vals = [p[2] for p in pixels]
-        avg_r = sum(r_vals) / len(r_vals)
-        avg_g = sum(g_vals) / len(g_vals)
-        avg_b = sum(b_vals) / len(b_vals)
-        var = sum((r - avg_r)**2 + (g - avg_g)**2 + (b - avg_b)**2 for r, g, b in pixels) / len(pixels)
-        if var < 15:  # 纯色水平横线特征
-            p_above = img.getpixel((int(w * 0.5), y - 2))[:3]
-            p_curr = img.getpixel((int(w * 0.5), y))[:3]
-            diff = sum(abs(a - b) for a, b in zip(p_above, p_curr))
+    y_test = int(h * 0.5)
+    for x in range(int(w * 0.20), int(w * 0.33)):
+        col_pixels = [img.getpixel((x, y))[:3] for y in range(int(h * 0.2), int(h * 0.8), 20)]
+        var = sum((p[0] - col_pixels[0][0])**2 + (p[1] - col_pixels[0][1])**2 for p in col_pixels) / len(col_pixels)
+        if var < 10:
+            left_p = img.getpixel((x - 2, y_test))[:3]
+            right_p = img.getpixel((x + 2, y_test))[:3]
+            diff = sum(abs(a - b) for a, b in zip(left_p, right_p))
             if diff > 15:
+                return x
+    return int(w * 0.273)
+
+def detect_input_divider_y(img: Image.Image) -> int:
+    """动态从下向上扫描微信聊天气泡区与输入框之间的水平物理分割线纵坐标 (避免误触气泡边缘，跨屏幕自适应)"""
+    w, h = img.size
+    chat_left = detect_chat_left_x(img)
+    x_start = chat_left + int((w - chat_left) * 0.10)
+    x_end = int(w * 0.95)
+    # 从 85% 高度逆向向上扫描到 58% 高度，优先命中位于最下方的输入框顶部分割细线
+    for y in range(int(h * 0.85), int(h * 0.58), -1):
+        row = [img.getpixel((x, y))[:3] for x in range(x_start, x_end, 5)]
+        avg_r = sum(p[0] for p in row) / len(row)
+        avg_g = sum(p[1] for p in row) / len(row)
+        avg_b = sum(p[2] for p in row) / len(row)
+        var = sum((p[0] - avg_r)**2 + (p[1] - avg_g)**2 + (p[2] - avg_b)**2 for p in row) / len(row)
+        if var < 15:
+            # 物理细线特征：必须同时与上一行和下一行形成明暗对比 (1~2px 细线)
+            above = img.getpixel((int((x_start + x_end) / 2), y - 2))[:3]
+            below = img.getpixel((int((x_start + x_end) / 2), y + 2))[:3]
+            diff_above = sum(abs(a - b) for a, b in zip(above, (avg_r, avg_g, avg_b)))
+            diff_below = sum(abs(a - b) for a, b in zip(below, (avg_r, avg_g, avg_b)))
+            if diff_above > 8 and diff_below > 8:
                 return y
-    return int(h * 0.73)  # 兜底安全边界
+    return int(h * 0.74)  # 兜底安全边界
 
 def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureResult:
     """
@@ -102,12 +117,15 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
                     is_mismatch=True
                 )
 
-        # 3. 动态自适应裁剪聊天消息气泡区域 (精准停在输入框分割线上方，跨屏幕与分辨率自适应)
+        # 3. 动态自适应裁剪聊天消息气泡区域 (精准停在输入框分割线上方，避开顶部标题栏与左侧联系人栏)
         img = Image.open(tmp_win)
         w, h = img.size
+        chat_left = detect_chat_left_x(img)
         divider_y = detect_input_divider_y(img)
-        crop_bottom = min(divider_y - 2, int(h * 0.74))
-        crop_box = (int(w * 0.32), int(h * 0.09), int(w * 0.98), crop_bottom)
+        crop_left = max(10, chat_left + 1)
+        crop_top = max(45, int(h * 0.060))
+        crop_bottom = min(divider_y - 2, int(h * 0.86))
+        crop_box = (crop_left, crop_top, int(w * 0.985), crop_bottom)
         cropped = img.crop(crop_box)
         cropped.save(tmp_crop)
 
@@ -148,7 +166,8 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
         for t in grouped_turns[-6:]:
             spk = "我" if t["role"] == "EGO" else (detected_contact or "对方")
             time_prefix = f"[{t.get('time_hint')}] " if t.get('time_hint') else ""
-            dialogue_lines.append(f"{time_prefix}[{spk}]: {t['text']}")
+            quote_suffix = f" (引用我方: \"{t['quote']}\")" if t.get('quote') else ""
+            dialogue_lines.append(f"{time_prefix}[{spk}]{quote_suffix}: {t['text']}")
         dialogue_context = "\n".join(dialogue_lines)
 
         # 8. 判定情况 1 vs 情况 2:
@@ -236,14 +255,20 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
     return ChatCaptureResult(reply_status="pending")
 
 def _filter_and_tag_bubbles(obs_list: List[dict], ego_aliases: List[str] = None) -> List[tuple]:
-    """过滤杂音并打标角色 (TIME / EGO / TARGET / QUOTE_EGO)"""
+    """
+    过滤杂音并打标角色 (TIME / EGO / TARGET / QUOTE_EGO)
+    空间排版与几何基准:
+    - cropped 图坐标系中，Vision 归一化横坐标 (0.0~1.0):
+      * TARGET (对方): 气泡靠左对齐，文本起始 x < 0.25，文本结束 r_x < 0.72。左侧头像位于 x < 0.08。
+      * EGO (我方): 气泡靠右对齐，文本结束 r_x > 0.72 且 x > 0.18，或识别区包含微信标志性绿底。
+      * TIME/SYSTEM (时间戳/居中提示): 居中对齐 (0.25 <= x <= 0.75 且 w < 0.40)，匹配时间或系统日期格式。
+    """
     noise_keywords = [
         "send", "发送", "按 enter", "ctrl+enter", "按 esc", "小胶囊", "点击复制",
         "抓取最新", "导入建档", "④", "口*、心", "uu.l", "曰％", "已发出"
     ]
 
     elements = []
-    in_quote = False
 
     for item in obs_list:
         txt = item["txt"].strip()
@@ -254,37 +279,35 @@ def _filter_and_tag_bubbles(obs_list: List[dict], ego_aliases: List[str] = None)
             continue
         if not re.search(r"[\u4e00-\u9fa5a-zA-Z0-9]", txt):
             continue
+        # 过滤边缘杂点或头像残影 (左侧边缘头像框与徽标)
+        if item["x"] < 0.05 and item["r_x"] < 0.08:
+            continue
         # 过滤底部单字或残损标点
         if len(txt) == 1 and item["y"] < 0.15:
             continue
 
-        # 2. 时间戳与系统日期判定
-        if re.search(r"(\d{1,2}:\d{2})", txt) and 0.22 <= item["x"] <= 0.78:
+        # 2. 时间戳与系统日期判定 (居中且匹配时间格式)
+        is_time = bool(re.search(r"(\d{1,2}:\d{2})", txt) or any(k in txt for k in ["昨天", "今天", "星期", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]))
+        is_centered = (0.25 <= item["x"] <= 0.75) and (item["w"] < 0.40)
+        if is_time and is_centered:
             elements.append(("TIME", txt, item))
-            in_quote = False
             continue
 
         # 3. 角色判定：绿色气泡或靠右对齐严格判定为我方 (EGO)
-        is_ego = item["has_green"] or (item["r_x"] > 0.75 and item["x"] > 0.12)
+        is_ego = item["has_green"] or (item["r_x"] > 0.72 and item["x"] > 0.18)
         if is_ego:
             elements.append(("EGO", txt, item))
-            in_quote = False
         else:
             # 4. 对方 (TARGET) 气泡内引用判定 (单聊中任何 `xxx：` 均为对方引用我方发言)
-            m = re.match(r"^([^\n：:]{1,16})[：:](.*)", txt)
+            m = re.match(r"^([^\n：:]{1,16})[：:]([\s\S]*)", txt)
             if m:
-                in_quote = True
-                quoted_body = m.group(2).strip()
-                elements.append(("QUOTE_EGO", quoted_body or txt, item))
-                continue
-            elif in_quote:
-                # 引用块通常较短且为前置引用
-                if item["w"] < 0.50 and not any(txt.startswith(k) for k in ["要么", "但是", "不过", "其实", "而且", "主要是", "哈哈", "是啊", "对啊"]):
-                    elements.append(("QUOTE_EGO", txt, item))
-                    continue
+                if "\n" in txt:
+                    p1, p2 = txt.split("\n", 1)
+                    elements.append(("QUOTE_EGO", p1.strip(), item))
+                    if p2.strip():
+                        elements.append(("TARGET", p2.strip(), item))
                 else:
-                    in_quote = False
-                    elements.append(("TARGET", txt, item))
+                    elements.append(("QUOTE_EGO", txt, item))
             else:
                 elements.append(("TARGET", txt, item))
 
