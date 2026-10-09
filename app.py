@@ -10,7 +10,18 @@ from server import service_instance, EchoLensHTTPHandler
 
 def main():
     port = config.SERVER_PORT
-    httpd = ThreadingHTTPServer((config.SERVER_HOST, port), EchoLensHTTPHandler)
+    httpd = None
+    for try_p in [port, port + 1, port + 2, 8766, 8767]:
+        try:
+            httpd = ThreadingHTTPServer((config.SERVER_HOST, try_p), EchoLensHTTPHandler)
+            port = try_p
+            break
+        except OSError:
+            continue
+    if not httpd:
+        print("[侧写] 无法绑定本地 HTTP 端口")
+        return
+
     url = f"http://{config.SERVER_HOST}:{port}/index.html"
     print(f"[侧写] 服务已启动: {url}")
 

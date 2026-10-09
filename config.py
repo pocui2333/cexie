@@ -9,7 +9,7 @@ HUD_DIR = os.path.join(BASE_DIR, "hud")
 DOCS_DIR = os.path.join(BASE_DIR, "docs")
 
 SERVER_HOST = "127.0.0.1"
-SERVER_PORT = 8765
+SERVER_PORT = int(os.getenv("PORT", 8765))
 
 WINDOW_EXPANDED_WIDTH = 430
 WINDOW_EXPANDED_HEIGHT = 410
