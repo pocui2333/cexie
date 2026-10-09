@@ -111,7 +111,8 @@ def build_user_prompt(
     ego_utterances: Optional[List[str]] = None,
     qa_snippets: Optional[List[Dict[str, str]]] = None,
     calibrated_terms: Optional[List[Dict[str, str]]] = None,
-    env_context: Optional[str] = None
+    env_context: Optional[str] = None,
+    knowledge_guidance: Optional[Dict[str, str]] = None
 ) -> str:
     ctx_section = f"【最近多轮对话上下文】:\n{context_text}\n\n" if context_text else ""
     env_section = f"{env_context}\n" if env_context else ""
@@ -132,6 +133,14 @@ def build_user_prompt(
         samples = [f"  - 我方真实发言示例: \"{u}\"" for u in ego_utterances[:6]]
         ego_section = f"【我方对该好友历史真实发言风格切片 (口吻大白话底色参考，负向内容必须过滤掉)】:\n" + "\n".join(samples) + "\n\n"
 
+    knowledge_section = ""
+    if knowledge_guidance:
+        knowledge_section = (
+            f"【通用高情商社交策略库参考 (选自知识库《{knowledge_guidance.get('source_doc', '')}》)】:\n"
+            f"- 战术定调: 【{knowledge_guidance.get('title', '')}】\n"
+            f"- 核心心法: {knowledge_guidance.get('principle', '')}\n\n"
+        )
+
     terms_section = ""
     if calibrated_terms:
         term_blocks = []
@@ -145,4 +154,4 @@ def build_user_prompt(
             term_blocks.append(block)
         terms_section = "【外部专有名词认知校准与防瞎编指引 (已实时检索外部知识，请据此确定我方合理认知边界)】:\n" + "\n\n".join(term_blocks) + "\n\n"
 
-    return f"{ctx_section}{env_section}{mem_section}{qa_section}{ego_section}{terms_section}【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n请严格以对方最新这句消息为核心接球点，接住对方的情绪与分享欲，结合当下时空生活背景与我方真实认知边界（严禁瞎编配方参数，严禁假装懂行专家，若知识库无关联绝不强行搬扯旧账），条条都要让对方读了开心舒服，输出 6 个选项的严格 JSON 数组，严禁任何 markdown 解释或代码块包裹。"
+    return f"{ctx_section}{env_section}{knowledge_section}{mem_section}{qa_section}{ego_section}{terms_section}【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n请严格以对方最新这句消息为核心接球点，接住对方的情绪与分享欲，结合当下时空生活背景、高情商策略心法与我方真实认知边界（严禁瞎编配方参数，严禁假装懂行专家，若知识库无关联绝不强行搬扯旧账），条条都要让对方读了开心舒服，输出 6 个选项的严格 JSON 数组，严禁任何 markdown 解释或代码块包裹。"

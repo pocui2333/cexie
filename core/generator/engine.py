@@ -15,6 +15,7 @@ from core.generator.prompts import build_system_prompt, build_user_prompt
 from core.generator.scenarios import synthesize_scenario_options
 from core.knowledge.term_search import extract_and_calibrate_terms
 from core.knowledge.context_enhancer import build_environmental_context
+from core.knowledge.retriever import KnowledgeRetriever
 
 class DualTrackGenerator:
     """
@@ -24,6 +25,7 @@ class DualTrackGenerator:
         self.ego_dir = ego_dir
         self.contacts_dir = contacts_dir
         self.knowledge_dir = knowledge_dir
+        self.knowledge_retriever = KnowledgeRetriever(self.knowledge_dir)
 
     def generate(
         self,
@@ -44,12 +46,15 @@ class DualTrackGenerator:
         # 动态时空常识、专属纪念日/生日与城市天气背景 (若无相关记录则静默跳过)
         env_context = build_environmental_context(target_name, self.contacts_dir)
 
+        # 动态通用社交与情商知识库策略检索
+        knowledge_guidance = self.knowledge_retriever.retrieve_guidance(text_clean)
+
         options_data = None
         if config.LLM_API_KEY:
             try:
                 options_data = self._call_llm(
                     target_name, text_clean, memory_episodes, rules,
-                    context_text, ego_utterances, qa_snippets, calibrated_terms, env_context
+                    context_text, ego_utterances, qa_snippets, calibrated_terms, env_context, knowledge_guidance
                 )
             except Exception as e:
                 print(f"[LLM Generate Error] {e}")
@@ -188,7 +193,8 @@ class DualTrackGenerator:
         ego_utterances: Optional[List[str]] = None,
         qa_snippets: Optional[List[Dict[str, str]]] = None,
         calibrated_terms: Optional[List[Dict[str, str]]] = None,
-        env_context: Optional[str] = None
+        env_context: Optional[str] = None,
+        knowledge_guidance: Optional[Dict[str, str]] = None
     ) -> Optional[List[Dict[str, str]]]:
         import ssl
         try:
@@ -203,7 +209,7 @@ class DualTrackGenerator:
         system_prompt = build_system_prompt(target_name, rules, ego_profile, target_dossier)
         user_prompt = build_user_prompt(
             incoming_text, memory, context_text, target_dossier,
-            ego_utterances, qa_snippets, calibrated_terms, env_context
+            ego_utterances, qa_snippets, calibrated_terms, env_context, knowledge_guidance
         )
 
         url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"
