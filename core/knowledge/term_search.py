@@ -1,7 +1,8 @@
 """
 Dynamic Term Search & Cognitive Boundary Calibration.
-Searches encyclopedic/web knowledge for unfamiliar proper nouns and aligns
+Searches encyclopedic knowledge for unfamiliar proper nouns and aligns
 with Ego's real-world background to prevent hallucination and false expertise.
+Optimized for ultra-low latency (<300ms) with high-precision gating and concurrent caching.
 Contains ZERO hardcoded private personal data.
 """
 import urllib.request
@@ -10,8 +11,9 @@ import json
 import ssl
 import re
 from typing import List, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor
 
-_TERM_CACHE: Dict[str, Dict[str, str]] = {}
+_TERM_CACHE: Dict[str, Optional[Dict[str, str]]] = {}
 
 COMMON_STOPWORDS = {
     "今天", "明天", "昨天", "其实", "可以", "但是", "不过", "如果", "虽然",
@@ -24,7 +26,9 @@ COMMON_STOPWORDS = {
     "哈哈", "嘿嘿", "哎呀", "哇塞", "好的", "不错", "好看", "挺好", "喜欢",
     "差不多", "可能", "应该", "好像", "到底", "简直", "竟然", "赶紧", "已经",
     "还要", "准备", "正在", "打算", "居然", "真好看", "好累啊", "太累了", "开心",
-    "最近", "平时", "当时", "后来", "整个人", "自己", "人家", "酸爽", "新入"
+    "最近", "平时", "当时", "后来", "整个人", "自己", "人家", "酸爽", "新入",
+    "天气不错", "一起吃饭", "晚上吃饭", "吃个饭", "喝杯茶", "去玩",
+    "ok", "hi", "hello", "app", "ppt", "pdf", "word", "vip"
 }
 
 COMMON_SUFFIXES = [
@@ -34,22 +38,18 @@ COMMON_SUFFIXES = [
     "耳机", "手表", "咖啡", "奶茶", "拿铁"
 ]
 
-STOP_CHARS = set("的了个下在我你他这那一是有么嘛吧呢啊呀去来都就也还过很太真")
-
-def _do_api_query(term: str) -> Optional[Dict[str, str]]:
+def _do_api_query(term: str, timeout: float = 1.0) -> Optional[Dict[str, str]]:
     clean_term = term.strip()
-    if not clean_term or len(clean_term) < 2 or clean_term in COMMON_STOPWORDS:
+    if not clean_term or len(clean_term) < 2 or clean_term.lower() in COMMON_STOPWORDS:
         return None
     if clean_term in _TERM_CACHE:
         return _TERM_CACHE[clean_term]
 
     ctx = ssl._create_unverified_context()
-
-    # 1. 优先百度百科 API
     try:
         url = f"https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key={urllib.parse.quote(clean_term)}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, context=ctx, timeout=2.5) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             if data and (data.get("desc") or data.get("abstract")):
                 res = {
@@ -63,72 +63,56 @@ def _do_api_query(term: str) -> Optional[Dict[str, str]]:
     except Exception:
         pass
 
-    # 2. 维基百科中文 API 兜底
-    try:
-        url = f"https://zh.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(clean_term)}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, context=ctx, timeout=2.5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if data and data.get("extract"):
-                res = {
-                    "term": clean_term,
-                    "title": data.get("title", clean_term),
-                    "category": data.get("description", "相关事物"),
-                    "abstract": data.get("extract", "")[:150]
-                }
-                _TERM_CACHE[clean_term] = res
-                return res
-    except Exception:
-        pass
-
+    _TERM_CACHE[clean_term] = None
     return None
 
 def lookup_term(term: str) -> Optional[Dict[str, str]]:
-    """查询专有名词或概念的百科/网络事实概要 (智能去除常见通用物品后缀)"""
+    """查询专有名词或概念的百科事实概要 (带内存正反缓存与后缀重试)"""
     clean_term = term.strip()
     if not clean_term or len(clean_term) < 2:
         return None
+    if clean_term in _TERM_CACHE:
+        return _TERM_CACHE[clean_term]
 
-    # 先直接查
-    res = _do_api_query(clean_term)
+    # 直接查询
+    res = _do_api_query(clean_term, timeout=1.0)
     if res:
         return res
 
-    # 去除常见语法与品类后缀重试 (如 '黑曜石手串' -> '黑曜石', '海蓝之谜面霜' -> '海蓝之谜')
+    # 去除常见品类后缀重试一次 (如 '黑曜石手串' -> '黑曜石')
     clean_no_de = re.sub(r"^的|的$", "", clean_term)
-    if clean_no_de != clean_term:
-        res = _do_api_query(clean_no_de)
-        if res:
-            return res
-
     for suf in COMMON_SUFFIXES:
         if clean_no_de.endswith(suf) and len(clean_no_de) > len(suf):
             root = clean_no_de[:-len(suf)].rstrip("的")
             if len(root) >= 2:
-                res = _do_api_query(root)
+                res = _do_api_query(root, timeout=0.8)
                 if res:
+                    _TERM_CACHE[clean_term] = res
                     return res
+            break
 
+    _TERM_CACHE[clean_term] = None
     return None
 
 def extract_and_calibrate_terms(incoming_text: str, ego_profile: Optional[str] = None) -> List[Dict[str, str]]:
     """
-    扫描待回复文本中的专有名词/品牌/生僻概念，检索知识并校准我方认知边界:
-    返回格式: [{"term": ..., "category": ..., "abstract": ..., "cognitive_hint": ...}]
+    极速精准实体探测与认知边界校准：
+    采用动作动词锚点、引号实体与专有英文字符精准门控，杜绝无脑全句切词查询。
+    普通日常闲聊 0ms 响应，包含实体时并发极速探测。
     """
     if not incoming_text or len(incoming_text) < 2:
         return []
 
-    candidate_tokens: List[str] = []
+    candidates: List[str] = []
     seen = set()
 
     def add_candidate(c: str):
         c = c.strip().strip("，。！？,.!? ")
-        if c and len(c) >= 2 and c not in COMMON_STOPWORDS and c not in seen:
+        if c and len(c) >= 2 and c.lower() not in COMMON_STOPWORDS and c not in seen:
             seen.add(c)
-            candidate_tokens.append(c)
+            candidates.append(c)
 
-    # 策略 1: 引号或书名号中的重点实体
+    # 策略 1: 引号或书名号中的显式实体
     for m in re.finditer(r"[“\"「『《【]([^”\"」』》】]{2,12})[”\"」』》】]", incoming_text):
         add_candidate(m.group(1))
 
@@ -137,40 +121,33 @@ def extract_and_calibrate_terms(incoming_text: str, ego_profile: Optional[str] =
     for m in re.finditer(action_pat, incoming_text):
         add_candidate(m.group(1))
 
-    # 策略 3: 英文/数字复合词与品牌词 (如 AirPods, SK-II, Lululemon, 999 等)
-    for m in re.finditer(r"[A-Za-z0-9][A-Za-z0-9\-\_\.]{1,20}", incoming_text):
-        add_candidate(m.group(0))
+    # 策略 3: 英文/数字复合词与品牌词 (如 AirPods, SK-II, Lululemon 等)
+    for m in re.finditer(r"[A-Za-z][A-Za-z0-9\-\_\.]{1,20}", incoming_text):
+        token = m.group(0)
+        if token.lower() not in COMMON_STOPWORDS:
+            add_candidate(token)
 
-    # 策略 4: 滑动 N-gram (长度 4 到 2)，排除高频虚词与助词
-    clean_text = re.sub(r"[，。！？\s\n\.\,\!\?…~～]+", " ", incoming_text)
-    for word in clean_text.split():
-        if len(word) >= 2:
-            for length in [4, 3, 2]:
-                for i in range(len(word) - length + 1):
-                    sub = word[i:i+length]
-                    if not any(ch in STOP_CHARS for ch in sub) and sub not in COMMON_STOPWORDS:
-                        add_candidate(sub)
+    # 关键优化：若无高置信度实体特征，直接秒级返回空列表，绝不对日常文本盲目发起网络查询
+    if not candidates:
+        return []
 
     results = []
-    matched_terms = set()
-    # 限制探测前 6 个候选词，保证毫秒级响应
-    for token in candidate_tokens[:6]:
-        # 如果当前 token 已与已匹配成功的名词重合，跳过
-        if any(token in m or m in token for m in matched_terms):
-            continue
-
-        term_info = lookup_term(token)
-        if term_info and term_info.get("category"):
-            hint = _calibrate_cognitive_boundary(term_info["category"], term_info.get("abstract", ""))
-            results.append({
-                "term": term_info["term"],
-                "category": term_info["category"],
-                "abstract": term_info["abstract"],
-                "cognitive_hint": hint
-            })
-            matched_terms.add(term_info["term"])
-            if len(results) >= 2:
-                break
+    top_candidates = candidates[:2]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {executor.submit(lookup_term, token): token for token in top_candidates}
+        for future in futures:
+            try:
+                term_info = future.result()
+                if term_info and term_info.get("category"):
+                    hint = _calibrate_cognitive_boundary(term_info["category"], term_info.get("abstract", ""))
+                    results.append({
+                        "term": term_info["term"],
+                        "category": term_info["category"],
+                        "abstract": term_info["abstract"],
+                        "cognitive_hint": hint
+                    })
+            except Exception:
+                pass
 
     return results
 

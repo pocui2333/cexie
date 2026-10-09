@@ -17,6 +17,8 @@ from core.knowledge.term_search import extract_and_calibrate_terms
 from core.knowledge.context_enhancer import build_environmental_context
 from core.knowledge.retriever import KnowledgeRetriever
 
+_SENTIMENT_CACHE: Dict[str, bool] = {}
+
 class DualTrackGenerator:
     """
     双轨 6 选项生成引擎 (The 2x3 Matrix Engine)
@@ -82,13 +84,23 @@ class DualTrackGenerator:
             options=options
         )
 
+    _sentiment_cache: Dict[str, bool] = {}
+
     def _filter_positive_neutral_by_ai(self, items: List[str]) -> List[str]:
         """
-        AI 动态情感与社交倾向过滤 (不设静态词表，完全交由大模型语义裁决):
+        AI 动态情感与社交倾向过滤 (带内存缓存与极速短路):
         - 判定为【负向】（抱怨、扫兴、挑刺、泼冷水、消极摆烂、刻薄、烦躁、攻击性）坚决过滤剔除
-        - 仅保留【正向】（夸奖、赞许、幽默打趣、支持）与【中性】（日常分享、随性交流、就事论事）的句子
+        - 仅保留【正向】与【中性】句子
         """
-        if not items or not config.LLM_API_KEY:
+        if not items:
+            return items
+
+        # 1. 检查缓存
+        uncached = [it for it in items if it not in _SENTIMENT_CACHE]
+        if not uncached:
+            return [it for it in items if _SENTIMENT_CACHE.get(it, True)]
+
+        if not config.LLM_API_KEY:
             return items
 
         try:
@@ -96,11 +108,11 @@ class DualTrackGenerator:
             import ssl
             prompt = (
                 "请对以下历史聊天句子进行情感与社交倾向判断。\n"
-                "AI 任务：如果句子带有【负向】倾向（包括抱怨、扫兴、挑刺、泼冷水、消极摆烂、刻薄、烦躁、攻击性），将其判定为负向并过滤剔除；\n"
-                "只保留【正向】（夸奖、赞许、幽默打趣、支持）或【中性】（日常分享、随性交流、就事论事）的句子。\n\n"
+                "AI 任务：如果句子带有【负向】倾向（包括抱怨、扫兴、挑刺、泼冷水、消极摆烂、刻薄、烦躁、攻击性），判定为负向并过滤剔除；\n"
+                "只保留【正向】或【中性】（日常分享、随性交流、就事论事）的句子。\n\n"
                 "待判断句子：\n" +
-                "\n".join([f"{i+1}. {txt}" for i, txt in enumerate(items)]) +
-                "\n\n请严格以 JSON 数组形式只返回通过筛选（正向或中性）的原始句子序号，格式如：[1, 3, 5]"
+                "\n".join([f"{i+1}. {txt}" for i, txt in enumerate(uncached)]) +
+                "\n\n请严格以 JSON 数组形式只返回通过筛选（正向或中性）的原始句子序号，格式如：[1, 3]"
             )
             url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"
             headers = {
@@ -111,7 +123,7 @@ class DualTrackGenerator:
                 "model": config.LLM_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1,
-                "max_tokens": 100
+                "max_tokens": 80
             }
             req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
             try:
@@ -120,18 +132,25 @@ class DualTrackGenerator:
             except Exception:
                 ctx = ssl._create_unverified_context()
 
-            with urllib.request.urlopen(req, context=ctx, timeout=6.0) as resp:
+            with urllib.request.urlopen(req, context=ctx, timeout=2.5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 content = data["choices"][0]["message"]["content"].strip()
                 m = re.search(r"\[\s*(?:\d+\s*,\s*)*\d*\s*\]", content)
+                passed_set = set()
                 if m:
                     indices = json.loads(m.group(0))
-                    valid = [items[i - 1] for i in indices if 1 <= i <= len(items)]
-                    return valid
-        except Exception as e:
-            print(f"[AI Sentiment Filter Warning] {e}")
+                    for idx in indices:
+                        if 1 <= idx <= len(uncached):
+                            passed_set.add(uncached[idx - 1])
 
-        return items
+                for it in uncached:
+                    _SENTIMENT_CACHE[it] = (it in passed_set)
+        except Exception as e:
+            # 超时或网络异常时降级放行，保证主流程极速响应
+            for it in uncached:
+                _SENTIMENT_CACHE[it] = True
+
+        return [it for it in items if _SENTIMENT_CACHE.get(it, True)]
 
     def _load_recent_ego_utterances(self, target_name: str, limit: int = 8) -> List[str]:
         db_path = os.path.join(self.contacts_dir, target_name, "index.db")

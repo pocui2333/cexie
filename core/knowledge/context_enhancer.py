@@ -326,7 +326,7 @@ def _get_city_weather(city_cn: str) -> Optional[str]:
     req = urllib.request.Request(url, headers={"User-Agent": "curl/7.68.0"})
 
     try:
-        with urllib.request.urlopen(req, context=ctx, timeout=2.0) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=1.0) as resp:
             text = resp.read().decode("utf-8").strip()
             # 解析例如 'Smoky haze +20°C'
             m = re.match(r"^([A-Za-z\s]+)\s+([+\-0-9°C]+)$", text)
@@ -341,6 +341,7 @@ def _get_city_weather(city_cn: str) -> Optional[str]:
             _WEATHER_CACHE[city_cn] = {"ts": now_ts, "desc": desc}
             return desc
     except Exception:
+        _WEATHER_CACHE[city_cn] = {"ts": now_ts, "desc": None}
         pass
 
     return None
