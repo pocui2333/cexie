@@ -65,6 +65,15 @@ def build_system_prompt(
    - 面对完全陌生的小众事物，大方展现好奇与平视，真诚交流，绝不装全知全能！
 
 ================================================================================
+【时空生活常识与环境背景运用指引】
+================================================================================
+1. 灵活融入当下时空生活常识（工作日/周末/时段/节令/温差等）：
+   - 将当前时空背景（如周五期待周末、工作日日常摸鱼/忙碌、饭点、换季降温等）转化为大白话聊天中的自然同频与共鸣。
+   - 绝对严禁机械式背诵播报（严禁“今天是2026年10月9日星期五”这种播音腔）！必须像真人日常随性唠嗑（如“周五了坚持一下晚上吃顿好的”、“这天气一到秋天降温还挺快”）。
+2. 专属纪念日/生日与城市天气“有据方提，宁缺毋滥”：
+   - 只有当提示中明确给出了对方生日/纪念日或城市天气时才可作为生活背景参考；若无相关信息坚决不主动瞎猜或生编硬造！
+
+================================================================================
 【6 个槽位的通用生成要求（每条都必须让对方感到舒适或有趣）】：
 ================================================================================
 【轨道 1：左列原生真实语句（槽位 1~3，sub_goal 统一为“原生原话”）】
@@ -101,9 +110,11 @@ def build_user_prompt(
     target_dossier: Optional[str] = None,
     ego_utterances: Optional[List[str]] = None,
     qa_snippets: Optional[List[Dict[str, str]]] = None,
-    calibrated_terms: Optional[List[Dict[str, str]]] = None
+    calibrated_terms: Optional[List[Dict[str, str]]] = None,
+    env_context: Optional[str] = None
 ) -> str:
     ctx_section = f"【最近多轮对话上下文】:\n{context_text}\n\n" if context_text else ""
+    env_section = f"{env_context}\n" if env_context else ""
     mem_section = ""
     if memory:
         items = [f"- {m.get('date', '')}: {m.get('facts', '')}" for m in memory]
@@ -134,4 +145,4 @@ def build_user_prompt(
             term_blocks.append(block)
         terms_section = "【外部专有名词认知校准与防瞎编指引 (已实时检索外部知识，请据此确定我方合理认知边界)】:\n" + "\n\n".join(term_blocks) + "\n\n"
 
-    return f"{ctx_section}{mem_section}{qa_section}{ego_section}{terms_section}【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n请严格以对方最新这句消息为核心接球点，接住对方的情绪与分享欲，结合我方认知边界（严禁瞎编配方参数，严禁假装懂行专家，若知识库无关联绝不强行搬扯旧账），条条都要让对方读了开心舒服，输出 6 个选项的严格 JSON 数组，严禁任何 markdown 解释或代码块包裹。"
+    return f"{ctx_section}{env_section}{mem_section}{qa_section}{ego_section}{terms_section}【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n请严格以对方最新这句消息为核心接球点，接住对方的情绪与分享欲，结合当下时空生活背景与我方真实认知边界（严禁瞎编配方参数，严禁假装懂行专家，若知识库无关联绝不强行搬扯旧账），条条都要让对方读了开心舒服，输出 6 个选项的严格 JSON 数组，严禁任何 markdown 解释或代码块包裹。"

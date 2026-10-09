@@ -14,6 +14,7 @@ from core.generator.guardrails import apply_linguistic_guardrails
 from core.generator.prompts import build_system_prompt, build_user_prompt
 from core.generator.scenarios import synthesize_scenario_options
 from core.knowledge.term_search import extract_and_calibrate_terms
+from core.knowledge.context_enhancer import build_environmental_context
 
 class DualTrackGenerator:
     """
@@ -40,12 +41,15 @@ class DualTrackGenerator:
         ego_profile = self._load_ego_profile()
         calibrated_terms = extract_and_calibrate_terms(text_clean, ego_profile)
 
+        # 动态时空常识、专属纪念日/生日与城市天气背景 (若无相关记录则静默跳过)
+        env_context = build_environmental_context(target_name, self.contacts_dir)
+
         options_data = None
         if config.LLM_API_KEY:
             try:
                 options_data = self._call_llm(
                     target_name, text_clean, memory_episodes, rules,
-                    context_text, ego_utterances, qa_snippets, calibrated_terms
+                    context_text, ego_utterances, qa_snippets, calibrated_terms, env_context
                 )
             except Exception as e:
                 print(f"[LLM Generate Error] {e}")
@@ -183,7 +187,8 @@ class DualTrackGenerator:
         context_text: Optional[str] = None,
         ego_utterances: Optional[List[str]] = None,
         qa_snippets: Optional[List[Dict[str, str]]] = None,
-        calibrated_terms: Optional[List[Dict[str, str]]] = None
+        calibrated_terms: Optional[List[Dict[str, str]]] = None,
+        env_context: Optional[str] = None
     ) -> Optional[List[Dict[str, str]]]:
         import ssl
         try:
@@ -196,7 +201,10 @@ class DualTrackGenerator:
         target_dossier = self._load_target_dossier(target_name)
 
         system_prompt = build_system_prompt(target_name, rules, ego_profile, target_dossier)
-        user_prompt = build_user_prompt(incoming_text, memory, context_text, target_dossier, ego_utterances, qa_snippets, calibrated_terms)
+        user_prompt = build_user_prompt(
+            incoming_text, memory, context_text, target_dossier,
+            ego_utterances, qa_snippets, calibrated_terms, env_context
+        )
 
         url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"
         headers = {
