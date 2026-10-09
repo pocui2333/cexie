@@ -13,6 +13,7 @@ from core.contracts import GenerationOption, DualTrackResult
 from core.generator.guardrails import apply_linguistic_guardrails
 from core.generator.prompts import build_system_prompt, build_user_prompt
 from core.generator.scenarios import synthesize_scenario_options
+from core.knowledge.term_search import extract_and_calibrate_terms
 
 class DualTrackGenerator:
     """
@@ -35,15 +36,25 @@ class DualTrackGenerator:
         ego_utterances = self._load_recent_ego_utterances(target_name)
         qa_snippets = self._load_qa_snippets(target_name, text_clean)
 
+        # 动态专有名词检索与我方认知边界校准 (防止知识库盲从与凭空瞎编)
+        ego_profile = self._load_ego_profile()
+        calibrated_terms = extract_and_calibrate_terms(text_clean, ego_profile)
+
         options_data = None
         if config.LLM_API_KEY:
             try:
-                options_data = self._call_llm(target_name, text_clean, memory_episodes, rules, context_text, ego_utterances, qa_snippets)
+                options_data = self._call_llm(
+                    target_name, text_clean, memory_episodes, rules,
+                    context_text, ego_utterances, qa_snippets, calibrated_terms
+                )
             except Exception as e:
                 print(f"[LLM Generate Error] {e}")
 
         if not options_data or len(options_data) != 6:
-            options_data = synthesize_scenario_options(target_name, text_clean, memory_episodes, rules, context_text, ego_utterances, qa_snippets)
+            options_data = synthesize_scenario_options(
+                target_name, text_clean, memory_episodes, rules,
+                context_text, ego_utterances, qa_snippets, calibrated_terms
+            )
 
         options: List[GenerationOption] = []
         for idx, item in enumerate(options_data, start=1):
@@ -171,7 +182,8 @@ class DualTrackGenerator:
         rules: Dict[str, Any],
         context_text: Optional[str] = None,
         ego_utterances: Optional[List[str]] = None,
-        qa_snippets: Optional[List[Dict[str, str]]] = None
+        qa_snippets: Optional[List[Dict[str, str]]] = None,
+        calibrated_terms: Optional[List[Dict[str, str]]] = None
     ) -> Optional[List[Dict[str, str]]]:
         import ssl
         try:
@@ -184,7 +196,7 @@ class DualTrackGenerator:
         target_dossier = self._load_target_dossier(target_name)
 
         system_prompt = build_system_prompt(target_name, rules, ego_profile, target_dossier)
-        user_prompt = build_user_prompt(incoming_text, memory, context_text, target_dossier, ego_utterances, qa_snippets)
+        user_prompt = build_user_prompt(incoming_text, memory, context_text, target_dossier, ego_utterances, qa_snippets, calibrated_terms)
 
         url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"
         headers = {

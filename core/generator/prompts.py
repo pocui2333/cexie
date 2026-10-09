@@ -44,11 +44,25 @@ def build_system_prompt(
 
 4. 紧扣对方最新一句话为核心主靶点（严禁翻旧账）：
    - 必须严格以对方最新发来的这句消息（当前核心情绪与主体内容）为主接球点！
-   - 绝不能无脑翻旧账或焦点漂移（严禁对方明明在开心聊美食/日常，你却抓住前几轮的体重或工作旧账大放厥词）！
+   - 绝不能无脑翻旧账或焦点漂移（严禁对方明明在开心聊美食/日常/新事物，你却抓住前几轮的旧账大放厥词）！
 
 5. 【AI 任务：坚决剔除负向历史，只吸纳正向中性语感】：
    - 参考的历史发言或问答切片中若存在任何消极、吐槽、抱怨、泼冷水或负面情绪，AI 必须判定为负向并坚决剔除，严禁参考，严禁被负面带跑偏！
    - 必须始终以积极、温和、提供情绪价值、让对方高兴舒服的正向或中性大白话为主！
+
+================================================================================
+【认知边界与防瞎编铁律（严禁盲从知识库与凭空造假）】
+================================================================================
+1. 知识库是“参考底色”，绝不是“生搬硬套的教条”：
+   - 检索到的历史背景记忆仅供了解双方过往关系脉络。如果历史记忆与对方当前聊的新事物没有直接关联，严禁强行翻扯旧账（严禁答非所问、生搬硬套旧记忆）！
+
+2. 严禁凭空编造事实或假装专业专家（知识库没有的坚决不瞎编）：
+   - 知识库里没有的信息，绝对严禁瞎编配方、虚构参数、生造经历或硬装懂行专家！
+   - 面对美妆、护肤、奢品、饰品、小众品牌等我方非专精领域，必须立足真实北方男生/研发程序员的真实认知边界：
+     * 不知道细节就大方展现直观感受（如好看、显气质、高级、省心、酷）、幽默打趣或好奇轻问。
+     * 绝不掉书袋，绝不背书，绝不生造虚假的成分或专业工序！
+   - 面对美食、咖啡等生活类事物，从好不好吃、过不过瘾、随性感受切入，绝不生造虚假配方！
+   - 面对完全陌生的小众事物，大方展现好奇与平视，真诚交流，绝不装全知全能！
 
 ================================================================================
 【6 个槽位的通用生成要求（每条都必须让对方感到舒适或有趣）】：
@@ -86,13 +100,14 @@ def build_user_prompt(
     context_text: Optional[str] = None,
     target_dossier: Optional[str] = None,
     ego_utterances: Optional[List[str]] = None,
-    qa_snippets: Optional[List[Dict[str, str]]] = None
+    qa_snippets: Optional[List[Dict[str, str]]] = None,
+    calibrated_terms: Optional[List[Dict[str, str]]] = None
 ) -> str:
     ctx_section = f"【最近多轮对话上下文】:\n{context_text}\n\n" if context_text else ""
     mem_section = ""
     if memory:
         items = [f"- {m.get('date', '')}: {m.get('facts', '')}" for m in memory]
-        mem_section = f"【检索到的相关背景记忆】:\n" + "\n".join(items) + "\n\n"
+        mem_section = f"【检索到的相关背景记忆 (仅供参考关系脉络，若与最新话题无关则无需强行引用)】:\n" + "\n".join(items) + "\n\n"
 
     qa_section = ""
     if qa_snippets:
@@ -106,4 +121,17 @@ def build_user_prompt(
         samples = [f"  - 我方真实发言示例: \"{u}\"" for u in ego_utterances[:6]]
         ego_section = f"【我方对该好友历史真实发言风格切片 (口吻大白话底色参考，负向内容必须过滤掉)】:\n" + "\n".join(samples) + "\n\n"
 
-    return f"{ctx_section}{mem_section}{qa_section}{ego_section}【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n请严格以对方最新这句消息为核心接球点，接住对方的情绪与分享欲，条条都要让对方读了开心舒服，输出 6 个选项的严格 JSON 数组，严禁任何 markdown 解释或代码块包裹。"
+    terms_section = ""
+    if calibrated_terms:
+        term_blocks = []
+        for t in calibrated_terms:
+            block = (
+                f"  - 专有名词: 【{t['term']}】\n"
+                f"    事实类别: {t.get('category', '')}\n"
+                f"    百科概要: {t.get('abstract', '')}\n"
+                f"    {t.get('cognitive_hint', '')}"
+            )
+            term_blocks.append(block)
+        terms_section = "【外部专有名词认知校准与防瞎编指引 (已实时检索外部知识，请据此确定我方合理认知边界)】:\n" + "\n\n".join(term_blocks) + "\n\n"
+
+    return f"{ctx_section}{mem_section}{qa_section}{ego_section}{terms_section}【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n请严格以对方最新这句消息为核心接球点，接住对方的情绪与分享欲，结合我方认知边界（严禁瞎编配方参数，严禁假装懂行专家，若知识库无关联绝不强行搬扯旧账），条条都要让对方读了开心舒服，输出 6 个选项的严格 JSON 数组，严禁任何 markdown 解释或代码块包裹。"
