@@ -1,6 +1,9 @@
+import logging
 import os
 import json
 from typing import Dict, Any, Optional, List
+
+logger = logging.getLogger(__name__)
 
 class KnowledgeRetriever:
     """
@@ -18,7 +21,7 @@ class KnowledgeRetriever:
                 with open(json_path, "r", encoding="utf-8") as f:
                     self.playbooks = json.load(f)
             except Exception as e:
-                print(f"[KnowledgeRetriever Error] Failed to load playbooks.json: {e}")
+                logger.error("[KnowledgeRetriever Error] Failed to load playbooks.json: %s", e)
 
     def retrieve_guidance(self, incoming_text: str) -> Optional[Dict[str, str]]:
         """

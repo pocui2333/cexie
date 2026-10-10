@@ -2,20 +2,22 @@
 DualTrackGenerator: Coordinates LLM generation and Heuristic Rule synthesis,
 ensuring strict 2x3 matrix compliance and linguistic guardrails.
 """
+import logging
 import os
 import json
-import re
-import urllib.request
-import urllib.error
-from typing import List, Dict, Any, Optional
-import config
+from concurrent.futures import ThreadPoolExecutor
+from typing import List, Dict, Any, Optional, Tuple
+from core import llm_client
 from core.contracts import GenerationOption, DualTrackResult
+from core.memory import EntityMemoryRetriever
 from core.generator.guardrails import apply_linguistic_guardrails
 from core.generator.prompts import build_system_prompt, build_user_prompt
 from core.generator.scenarios import synthesize_scenario_options
 from core.knowledge.term_search import extract_and_calibrate_terms
 from core.knowledge.context_enhancer import build_environmental_context
 from core.knowledge.retriever import KnowledgeRetriever
+
+logger = logging.getLogger(__name__)
 
 _SENTIMENT_CACHE: Dict[str, bool] = {}
 
@@ -28,6 +30,7 @@ class DualTrackGenerator:
         self.contacts_dir = contacts_dir
         self.knowledge_dir = knowledge_dir
         self.knowledge_retriever = KnowledgeRetriever(self.knowledge_dir)
+        self.memory = EntityMemoryRetriever(self.contacts_dir)
 
     def generate(
         self,
@@ -41,31 +44,40 @@ class DualTrackGenerator:
     ) -> DualTrackResult:
         rules = self._load_rules(target_name)
         text_clean = incoming_text.strip()
-        ego_utterances = self._load_recent_ego_utterances(target_name)
-        qa_snippets = self._load_qa_snippets(target_name, text_clean)
-
-        # 动态专有名词检索与我方认知边界校准 (防止知识库盲从与凭空瞎编)
         ego_profile = self._load_ego_profile()
-        calibrated_terms = extract_and_calibrate_terms(text_clean, ego_profile)
 
-        # 动态时空常识、专属纪念日/生日与城市天气背景 (若无相关记录则静默跳过)
-        env_context = build_environmental_context(target_name, self.contacts_dir)
+        # 各路上下文互不依赖 (本地 SQLite / 百科 / 天气)，并发获取以压低总延迟
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            f_ego = pool.submit(self.memory.get_recent_ego_utterances, target_name, 16)
+            f_qa = pool.submit(self.memory.retrieve_qa_scene_snippets, target_name, text_clean, 6)
+            # 动态专有名词检索与我方认知边界校准 (防止知识库盲从与凭空瞎编)
+            f_terms = pool.submit(extract_and_calibrate_terms, text_clean, ego_profile)
+            # 动态时空常识、专属纪念日/生日与城市天气背景 (若无相关记录则静默跳过)
+            f_env = pool.submit(build_environmental_context, target_name, self.contacts_dir)
+            raw_ego_utterances = f_ego.result()
+            raw_qa_snippets = f_qa.result()
+            calibrated_terms = f_terms.result()
+            env_context = f_env.result()
+
+        # 我方历史原话与问答切片中的负向句子合并为一次 AI 判定后剔除
+        ego_utterances, qa_snippets = self._filter_style_samples(raw_ego_utterances, raw_qa_snippets)
 
         # 动态通用社交与情商知识库策略检索
         knowledge_guidance = self.knowledge_retriever.retrieve_guidance(text_clean)
 
         llm_res = None
-        if config.LLM_API_KEY:
+        if llm_client.is_enabled():
             try:
                 llm_res = self._call_llm(
                     target_name, text_clean, memory_episodes, rules,
                     context_text, ego_utterances, qa_snippets, calibrated_terms, env_context, knowledge_guidance,
-                    today_memory=today_memory, is_replied=is_replied, last_ego_text=last_ego_text
+                    today_memory=today_memory, is_replied=is_replied, last_ego_text=last_ego_text,
+                    ego_profile=ego_profile
                 )
             except Exception as e:
-                print(f"[LLM Generate Error] {e}")
+                logger.error("[LLM Generate Error] %s", e)
 
-        if llm_res and isinstance(llm_res, dict) and "options" in llm_res and len(llm_res["options"]) == 6:
+        if llm_res:
             subtext = llm_res.get("subtext", "").strip()
             risk_alert = llm_res.get("risk_alert", "").strip()
             keywords = llm_res.get("keywords", [])
@@ -81,7 +93,7 @@ class DualTrackGenerator:
 
         options: List[GenerationOption] = []
         for idx, item in enumerate(options_data, start=1):
-            filtered_text = apply_linguistic_guardrails(item["text"], rules)
+            filtered_text = apply_linguistic_guardrails(str(item.get("text", "")), rules)
             options.append(GenerationOption(
                 slot_id=idx,
                 track="native" if idx <= 3 else "evolved",
@@ -99,7 +111,15 @@ class DualTrackGenerator:
             keywords=keywords
         )
 
-    _sentiment_cache: Dict[str, bool] = {}
+    def _filter_style_samples(
+        self, ego_utterances: List[str], qa_snippets: List[Dict[str, str]], limit_ego: int = 8, limit_qa: int = 3
+    ) -> Tuple[List[str], List[Dict[str, str]]]:
+        candidates = list(dict.fromkeys(ego_utterances + [s["ego_replied"] for s in qa_snippets]))
+        passed = set(self._filter_positive_neutral_by_ai(candidates))
+        return (
+            [u for u in ego_utterances if u in passed][:limit_ego],
+            [s for s in qa_snippets if s["ego_replied"] in passed][:limit_qa],
+        )
 
     def _filter_positive_neutral_by_ai(self, items: List[str]) -> List[str]:
         """
@@ -110,17 +130,8 @@ class DualTrackGenerator:
         if not items:
             return items
 
-        # 1. 检查缓存
         uncached = [it for it in items if it not in _SENTIMENT_CACHE]
-        if not uncached:
-            return [it for it in items if _SENTIMENT_CACHE.get(it, True)]
-
-        if not config.LLM_API_KEY:
-            return items
-
-        try:
-            import urllib.request
-            import ssl
+        if uncached and llm_client.is_enabled():
             prompt = (
                 "请对以下历史聊天句子进行情感与社交倾向判断。\n"
                 "AI 任务：如果句子带有【负向】倾向（包括抱怨、扫兴、挑刺、泼冷水、消极摆烂、刻薄、烦躁、攻击性），判定为负向并过滤剔除；\n"
@@ -129,93 +140,19 @@ class DualTrackGenerator:
                 "\n".join([f"{i+1}. {txt}" for i, txt in enumerate(uncached)]) +
                 "\n\n请严格以 JSON 数组形式只返回通过筛选（正向或中性）的原始句子序号，格式如：[1, 3]"
             )
-            url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {config.LLM_API_KEY}"
-            }
-            body = {
-                "model": config.LLM_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
-                "max_tokens": 80
-            }
-            req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
             try:
-                import certifi
-                ctx = ssl.create_default_context(cafile=certifi.where())
-            except Exception:
-                ctx = ssl._create_unverified_context()
-
-            with urllib.request.urlopen(req, context=ctx, timeout=2.5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                content = data["choices"][0]["message"]["content"].strip()
-                m = re.search(r"\[\s*(?:\d+\s*,\s*)*\d*\s*\]", content)
-                passed_set = set()
-                if m:
-                    indices = json.loads(m.group(0))
-                    for idx in indices:
-                        if 1 <= idx <= len(uncached):
-                            passed_set.add(uncached[idx - 1])
-
+                content = llm_client.chat_completion(
+                    [{"role": "user", "content": prompt}], temperature=0.1, max_tokens=120, timeout=2.5
+                )
+                indices = llm_client.extract_json(content, want="array") or []
+                passed_set = {uncached[i - 1] for i in indices if isinstance(i, int) and 1 <= i <= len(uncached)}
                 for it in uncached:
-                    _SENTIMENT_CACHE[it] = (it in passed_set)
-        except Exception as e:
-            # 超时或网络异常时降级放行，保证主流程极速响应
-            for it in uncached:
-                _SENTIMENT_CACHE[it] = True
+                    _SENTIMENT_CACHE[it] = it in passed_set
+            except Exception:
+                # 超时或网络异常时本轮降级放行 (不写缓存，下次再判)，保证主流程极速响应
+                pass
 
         return [it for it in items if _SENTIMENT_CACHE.get(it, True)]
-
-    def _load_recent_ego_utterances(self, target_name: str, limit: int = 8) -> List[str]:
-        db_path = os.path.join(self.contacts_dir, target_name, "index.db")
-        if not os.path.exists(db_path):
-            return []
-        results = []
-        try:
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT facts_summary FROM episode_records 
-                WHERE facts_summary LIKE '%我:%' 
-                ORDER BY id DESC LIMIT 50
-            """)
-            for row in cur.fetchall():
-                matches = re.findall(r'我:\s*([^;。\n]+)', row[0])
-                for m in matches:
-                    cleaned = m.strip()
-                    if cleaned and cleaned not in results and 2 <= len(cleaned) <= 60 and "暂未回复" not in cleaned:
-                        results.append(cleaned)
-                        if len(results) >= limit * 2:
-                            break
-                if len(results) >= limit * 2:
-                    break
-            conn.close()
-        except Exception:
-            pass
-
-        # 在检索步骤的结尾，由 AI 判定并过滤掉负向句子，仅保留正向与中性原话
-        if results:
-            filtered = self._filter_positive_neutral_by_ai(results)
-            return filtered[:limit]
-        return results
-
-    def _load_qa_snippets(self, target_name: str, incoming_text: str, limit: int = 3) -> List[Dict[str, str]]:
-        try:
-            from core.memory import EntityMemoryRetriever
-            retriever = EntityMemoryRetriever(self.contacts_dir)
-            raw_snippets = retriever.retrieve_qa_scene_snippets(target_name, incoming_text, limit=limit * 2)
-            if not raw_snippets:
-                return []
-            # 在问答切片检索结尾，提取我方的真实回答交给 AI 过滤，负向回答直接剔除
-            ego_replies = [s["ego_replied"] for s in raw_snippets]
-            valid_replies = set(self._filter_positive_neutral_by_ai(ego_replies))
-            clean_snippets = [s for s in raw_snippets if s["ego_replied"] in valid_replies]
-            return clean_snippets[:limit]
-        except Exception as e:
-            print(f"[Load QA Snippets Error] {e}")
-            return []
 
     def _call_llm(
         self,
@@ -231,90 +168,40 @@ class DualTrackGenerator:
         knowledge_guidance: Optional[Dict[str, str]] = None,
         today_memory: Optional[List[Dict[str, Any]]] = None,
         is_replied: bool = False,
-        last_ego_text: Optional[str] = None
+        last_ego_text: Optional[str] = None,
+        ego_profile: str = ""
     ) -> Optional[Dict[str, Any]]:
-        import ssl
-        try:
-            import certifi
-            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-        except Exception:
-            ssl_ctx = ssl._create_unverified_context()
-
-        ego_profile = self._load_ego_profile()
         target_dossier = self._load_target_dossier(target_name)
 
         system_prompt = build_system_prompt(target_name, rules, ego_profile, target_dossier)
         user_prompt = build_user_prompt(
-            incoming_text, memory, context_text, target_dossier,
+            incoming_text, memory, context_text,
             ego_utterances, qa_snippets, calibrated_terms, env_context, knowledge_guidance,
             today_memory=today_memory, is_replied=is_replied, last_ego_text=last_ego_text
         )
 
-        url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {config.LLM_API_KEY}"
-        }
-        body = {
-            "model": config.LLM_MODEL,
-            "messages": [
+        content = llm_client.chat_completion(
+            [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            "temperature": 0.7,
-            "max_tokens": 800
-        }
+            temperature=0.7, max_tokens=800, timeout=12.0
+        )
 
-        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, context=ssl_ctx, timeout=12.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"]["content"].strip()
-            if content.startswith("```"):
-                content = re.sub(r"^```(?:json)?\n?", "", content)
-                content = re.sub(r"\n?```$", "", content)
-            
-            parsed = None
-            # 1. 尝试匹配完整 JSON 对象
-            match_obj = re.search(r"\{.*\}", content, re.DOTALL)
-            if match_obj:
-                raw_json = match_obj.group(0)
-                cleaned_json = re.sub(r',\s*([\]}])', r'\1', raw_json)
-                try:
-                    parsed = json.loads(cleaned_json, strict=False)
-                except Exception:
-                    try:
-                        parsed = json.loads(raw_json, strict=False)
-                    except Exception:
-                        pass
+        # 1. 标准对象格式 {subtext, risk_alert, keywords, options}
+        parsed = llm_client.extract_json(content, want="object")
+        if isinstance(parsed, dict) and isinstance(parsed.get("options"), list) and len(parsed["options"]) == 6:
+            return {
+                "subtext": str(parsed.get("subtext", "")).strip(),
+                "risk_alert": str(parsed.get("risk_alert", "")).strip(),
+                "keywords": parsed.get("keywords", []) if isinstance(parsed.get("keywords"), list) else [],
+                "options": parsed["options"]
+            }
 
-            # 2. 如果解析为对象且包含 options
-            if isinstance(parsed, dict) and "options" in parsed and isinstance(parsed["options"], list) and len(parsed["options"]) == 6:
-                return {
-                    "subtext": str(parsed.get("subtext", "")).strip(),
-                    "risk_alert": str(parsed.get("risk_alert", "")).strip(),
-                    "keywords": parsed.get("keywords", []) if isinstance(parsed.get("keywords"), list) else [],
-                    "options": parsed["options"]
-                }
-
-            # 3. 兜底匹配纯数组格式
-            match_arr = re.search(r"\[\s*\{.*\}\s*\]", content, re.DOTALL)
-            if match_arr:
-                raw_arr = match_arr.group(0)
-                cleaned_arr = re.sub(r',\s*([\]}])', r'\1', raw_arr)
-                try:
-                    parsed_arr = json.loads(cleaned_arr, strict=False)
-                except Exception:
-                    try:
-                        parsed_arr = json.loads(raw_arr, strict=False)
-                    except Exception:
-                        parsed_arr = None
-                if isinstance(parsed_arr, list) and len(parsed_arr) == 6:
-                    return {
-                        "subtext": "",
-                        "risk_alert": "",
-                        "keywords": [],
-                        "options": parsed_arr
-                    }
+        # 2. 兜底匹配纯数组格式
+        parsed_arr = llm_client.extract_json(content, want="array")
+        if isinstance(parsed_arr, list) and len(parsed_arr) == 6:
+            return {"subtext": "", "risk_alert": "", "keywords": [], "options": parsed_arr}
 
         return None
 
@@ -353,7 +240,11 @@ class DualTrackGenerator:
             try:
                 with open(target_rules_path, "r", encoding="utf-8") as f:
                     t_rules = json.load(f)
-                    rules["taboo_words"].extend(t_rules.get("taboo_words", []))
+                # 联系人规则覆盖全局规则；禁用词类列表取并集
+                for key in ("taboo_words", "banned_phrases"):
+                    merged = list(rules.get(key, [])) + list(t_rules.get(key, []))
+                    t_rules[key] = list(dict.fromkeys(merged))
+                rules.update(t_rules)
             except Exception:
                 pass
         return rules

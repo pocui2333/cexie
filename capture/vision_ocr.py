@@ -1,8 +1,7 @@
 """
 macOS Vision OCR text recognition and visual bubble feature analysis.
 """
-import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from PIL import Image
 import Vision
 from Foundation import NSURL, NSDictionary
@@ -58,46 +57,3 @@ def has_green_bubble_background(pil_image: Image.Image, x: float, y: float, w: f
             except Exception:
                 pass
     return False
-
-def extract_contact_from_header(screenshot_path: str) -> Optional[str]:
-    """从微信窗口顶部中间标题栏提取活跃聊天对象备注名"""
-    try:
-        img = Image.open(screenshot_path)
-        w, h = img.size
-        # 裁剪顶栏中央区域 (避免侧边栏干扰，覆盖联系人/群聊名)
-        crop_box = (int(w * 0.26), 0, int(w * 0.70), int(h * 0.09))
-        cropped = img.crop(crop_box)
-        cw, ch = cropped.size
-        # 放大 2 倍以强化视网膜小字号汉字的识别精度 (避免笔画粘连或形近字误判)
-        upscaled = cropped.resize((cw * 2, ch * 2), Image.Resampling.LANCZOS)
-        tmp_crop = "/tmp/echolens_header_crop.png"
-        upscaled.save(tmp_crop)
-
-        observations = run_vision_ocr(tmp_crop)
-        if not observations:
-            return None
-
-        # 过滤时间戳与系统星期杂词
-        ignore_words = [
-            "saturday", "sunday", "monday", "tuesday", "wednesday", "thursday", "friday",
-            "yesterday", "today", "昨天", "今天", "周六", "周日", "星期", "微信", "wechat"
-        ]
-
-        valid_names = []
-        for obs in observations:
-            txt = obs["text"]
-            low = txt.lower()
-            if any(ign in low for ign in ignore_words):
-                continue
-            if re.search(r"(\d{1,2}:\d{2})", low):
-                continue
-            # 允许中英文字符、数字、下划线及群人数括号
-            if re.match(r"^[\u4e00-\u9fa5A-Za-z0-9_\-\s（）\(\)]+$", txt):
-                valid_names.append((obs["y"], txt))
-
-        if valid_names:
-            valid_names.sort(key=lambda x: -x[0])
-            return valid_names[0][1].strip()
-    except Exception as e:
-        print(f"[Header OCR Error] {e}")
-    return None

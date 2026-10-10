@@ -12,3 +12,6 @@ pyobjc-core>=10.0
 pyobjc-framework-Cocoa>=10.0
 pyobjc-framework-Quartz>=10.0
 pyobjc-framework-Vision>=10.0
+
+# HTTPS 证书包 (所有大模型 / 百科 / 天气请求均强制校验 TLS 证书)
+certifi>=2024.2.2

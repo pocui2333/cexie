@@ -90,6 +90,11 @@ class CaptureController {
                     this.onMismatch(detected, data.target || target);
                     resetBtnState(1200);
                     return;
+                } else if (data.status === 'capture_failed') {
+                    this.btnTriggerCapture.textContent = '未抓到内容';
+                    this.btnTriggerCapture.style.color = '#fbbf24';
+                    resetBtnState(1200);
+                    return;
                 } else if (data.recorded) {
                     this.btnTriggerCapture.textContent = '已更新并沉淀';
                     this.btnTriggerCapture.style.color = '#34d399';
@@ -129,6 +134,11 @@ class CaptureController {
 
     syncState(data) {
         if (!data) return;
+        // 后端异步生成建议期间在按钮上提示，生成完成后由轮询恢复
+        if (this.btnTriggerCapture && !this.isCapturing) {
+            this.btnTriggerCapture.textContent = data.generating ? '生成中...' : '抓取最新';
+            this.btnTriggerCapture.style.color = data.generating ? '#38bdf8' : '';
+        }
         if (data.auto_loop_enabled !== undefined) {
             this.isAutoLooping = !!data.auto_loop_enabled;
             this.updateAutoLoopButton(data.auto_loop_countdown);

@@ -1,7 +1,7 @@
 import os
 import json
-import sqlite3
 from typing import Dict, Any, Optional
+from core import store
 from ingestion.folder_scanner import MultiFormatFolderScanner
 from ingestion.episodic_distiller import EpisodicDistiller
 
@@ -16,11 +16,12 @@ class ContactProfiler:
         self.contacts_dir = contacts_dir
 
     def onboard_contact(self, target_name: str, free_text: str, history_folder: Optional[str] = None) -> Dict[str, Any]:
-        target_name = target_name.strip()
-        if not target_name:
-            return {"status": "error", "message": "微信备注名不可为空"}
-
-        sandbox_dir = os.path.join(self.contacts_dir, target_name)
+        try:
+            target_name = store.validate_contact_name(target_name)
+            sandbox_dir = store.contact_dir(target_name, self.contacts_dir)
+        except store.InvalidContactName as e:
+            return {"status": "error", "message": str(e)}
+        free_text = free_text or ""
         os.makedirs(sandbox_dir, exist_ok=True)
 
         # 1. 生成 rules.json
@@ -41,17 +42,16 @@ class ContactProfiler:
         episodes_path = os.path.join(sandbox_dir, "episodes.md")
         if not os.path.exists(episodes_path):
             with open(episodes_path, "w", encoding="utf-8") as f:
-                f.write(f"# {target_name} 历史事实故事流 (Chatless)\n\n")
+                f.write(f"# {target_name} 历史事实故事流\n\n")
 
         # 4. 初始化 index.db
-        db_path = os.path.join(sandbox_dir, "index.db")
-        self._init_sqlite(db_path)
+        store.ensure_schema(os.path.join(sandbox_dir, "index.db"))
 
         # 5. 若指定了历史记录文件夹/文件，自动扫描并批量脱水蒸馏
         ingest_summary = None
         if history_folder and (os.path.isdir(history_folder) or os.path.isfile(history_folder)):
             scanner = MultiFormatFolderScanner(target_name)
-            messages = scanner.scan_path(history_folder) if hasattr(scanner, "scan_path") else scanner.scan_folder(history_folder)
+            messages = scanner.scan_path(history_folder)
             if messages:
                 distiller = EpisodicDistiller(self.contacts_dir)
                 distill_res = distiller.distill_history_stream(target_name, messages)
@@ -119,28 +119,3 @@ class ContactProfiler:
 ## 三、 终身大事记
 - 初始档案创建于系统启动期
 """
-
-    def _init_sqlite(self, db_path: str):
-        conn = sqlite3.connect(db_path)
-        cur = conn.cursor()
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS episode_records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            episode_date TEXT NOT NULL,
-            theme TEXT NOT NULL,
-            entities_blob TEXT NOT NULL,
-            facts_summary TEXT NOT NULL,
-            relationship_dynamic TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS entity_inverted_index (
-            entity_name TEXT NOT NULL,
-            episode_id INTEGER NOT NULL,
-            weight REAL DEFAULT 1.0,
-            PRIMARY KEY (entity_name, episode_id)
-        );
-        """)
-        conn.commit()
-        conn.close()

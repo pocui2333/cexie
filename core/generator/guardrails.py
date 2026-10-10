@@ -5,6 +5,8 @@ Ensures zero AI stiffness, enforces pure comma-delimited phrasing, and removes p
 import re
 from typing import Dict, Any
 
+_EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200D]")
+
 def apply_linguistic_guardrails(text: str, rules: Dict[str, Any]) -> str:
     """
     过滤一切书面语、自媒体鸡汤腔与伪人心理咨询词，强制逗号与空格断句，严禁感叹号、句号和 emoji
@@ -19,20 +21,22 @@ def apply_linguistic_guardrails(text: str, rules: Dict[str, Any]) -> str:
         "松弛感", "挺通透", "遵从本心", "心头舒坦", "大财主上线", "接纳自己", "千金难买心头好",
         "顺着你自己舒服的节奏来就行", "情绪价值"
     ]
+    # 联系人 / 全局自定义禁用词 (rules.json 中 taboo_words 与 banned_phrases 均生效)
+    taboo_phrases = taboo_phrases + list(rules.get("taboo_words", [])) + list(rules.get("banned_phrases", []))
     for taboo in taboo_phrases:
-        clean = clean.replace(taboo, "")
+        if taboo:
+            clean = clean.replace(taboo, "")
 
     # 2. 标点净化：严禁句号和感叹号，全转为逗号
-    clean = clean.replace("。", "，").replace("！", "，").replace("!", "，").replace(".", "，")
-    # 消除多重逗号
-    clean = re.sub(r"，+", "，", clean)
+    #    英文句点仅在不夹于字母数字之间时替换，保留 "3.5折"、网址等
+    clean = clean.replace("。", "，").replace("！", "，").replace("!", "，")
+    clean = re.sub(r"(?<![0-9A-Za-z])\.|\.(?![0-9A-Za-z])", "，", clean)
+
+    # 3. 剔除 emoji (仅匹配 emoji 区段，避免误删生僻汉字等其他非 BMP 字符)
+    clean = _EMOJI_RE.sub("", clean)
+
+    # 4. 删除禁词后可能残留多重逗号 / 首尾逗号与空白
+    clean = re.sub(r"\s*，[\s，]*", "，", clean)
     clean = clean.strip("，").strip()
-
-    # 3. 严格剔除一切 emoji
-    clean = re.sub(r"[\U00010000-\U0010ffff]", "", clean)
-
-    # 4. 遵守联系人自定义禁用词
-    for word in rules.get("taboo_words", []):
-        clean = clean.replace(word, "")
 
     return clean

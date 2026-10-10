@@ -1,470 +1,118 @@
+import logging
 import os
 import re
-import sqlite3
+import json
+import hashlib
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
+from core import store
 from core.contracts import ChatMessage, FactEpisode
+
+logger = logging.getLogger(__name__)
+
+# checkpoint.json 中保留的已沉淀消息指纹上限 (按写入顺序淘汰最旧的)
+MAX_CHECKPOINT_HASHES = 20000
+
+_NOISE_PATTERNS = [
+    "按 esc", "小胶囊", "点击复制", "抓取最新", "导入建档",
+    "send", "发送", "口*、心", "uu.l", "曰％", "已发出"
+]
+_PLACEHOLDER_MESSAGES = ("[图片]", "[语音]", "[视频]", "[动画表情]", "[表情]", "[语音/视频通话]")
+
+
+def turn_hash(role: str, text: str) -> str:
+    """单条发言指纹 (role 为 EGO / TARGET)，与历史 checkpoint.json 格式保持兼容"""
+    return hashlib.md5(f"{role}::{text}".encode("utf-8")).hexdigest()
+
 
 class EpisodicDistiller:
     """
-    情境事件脱水归档器 (Chatless Distiller):
+    情境事件归档器:
     - 提炼对话中的核心事实、发生经过、涉及实体
     - 动态从联系人 dossier.md 与会话语义中提取实体，绝不硬编码任何个人隐私
-    - 追加到 contacts/{微信备注}/episodes.md
-    - 写入 index.db 建立毫秒级关键词/实体倒排索引
-    - 彻底粉碎原始聊天记录，绝不长期持久化原句
+    - 追加到 contacts/{微信备注}/episodes.md，并写入 index.db 建立实体倒排索引
+    - 所有写入经由 store.write_lock 串行化，并以 checkpoint.json 指纹去重，保证幂等
     """
     def __init__(self, contacts_dir: str):
         self.contacts_dir = contacts_dir
 
-    def distill_and_archive(self, target_name: str, messages: List[ChatMessage]) -> Dict[str, Any]:
-        if not messages:
-            return {"status": "empty_messages"}
-
-        sandbox_dir = os.path.join(self.contacts_dir, target_name)
-        if not os.path.exists(sandbox_dir):
-            return {"status": "error", "message": f"联系人 {target_name} 沙盒不存在"}
-
-        # 1. 提炼脱水事件 (动态语义提取)
-        episode = self._extract_episode_facts(target_name, messages, sandbox_dir)
-
-        # 2. 追加写入 episodes.md
-        episodes_path = os.path.join(sandbox_dir, "episodes.md")
-        with open(episodes_path, "a", encoding="utf-8") as f:
-            f.write(f"\n## [{episode.episode_date}] {episode.theme}\n")
-            f.write(f"- **涉及实体**：{episode.entities}\n")
-            f.write("- **发生事实**：\n")
-            for idx, fact in enumerate(episode.facts, start=1):
-                f.write(f"  {idx}. {fact}\n")
-            f.write(f"- **关系动态**：{episode.relationship_dynamic}\n")
-
-        # 3. 写入 SQLite index.db
-        db_path = os.path.join(sandbox_dir, "index.db")
-        self._index_episode(db_path, episode)
-
-        # 4. Chatless: 原始消息列表在函数退出后从内存析构，绝不存盘
-
-        return {
-            "status": "success",
-            "target_name": target_name,
-            "theme": episode.theme,
-            "facts_count": len(episode.facts)
-        }
-
-    def distill_and_archive_turns(
-        self,
-        target_name: str,
-        raw_turns: List[Dict[str, Any]],
-        time_hint: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """将实时捕获的轮次消息 (raw_turns) 转化为事件并安全写入脱水事实流 (带去重与防抖)"""
-        if not raw_turns or not target_name:
-            return {"status": "empty_turns"}
-
-        sandbox_dir = os.path.join(self.contacts_dir, target_name)
-        if not os.path.exists(sandbox_dir):
-            return {"status": "contact_sandbox_not_found"}
-
-        messages = []
-        now = datetime.now()
-        for t in raw_turns:
-            role = t.get("role", "TARGET")
-            txt = t.get("text", "").strip()
-            if not txt or len(txt) < 2:
-                continue
-            is_ego = (role == "EGO")
-            sender = "我" if is_ego else target_name
-            messages.append(ChatMessage(
-                sender_name=sender,
-                role="me" if is_ego else "target",
-                content=txt,
-                timestamp=now
-            ))
-        if not messages:
-            return {"status": "no_valid_messages"}
-
-        # 使用 distill_history_stream 自动去重 (基于 md5 hash 校验 checkpoint.json，避免每分钟轮询重复录入)
-        return self.distill_history_stream(target_name, messages, session_gap_seconds=3600)
-
-    def distill_history_stream(
-        self,
-        target_name: str,
-        messages: List[ChatMessage],
-        session_gap_seconds: int = 7200,
-        max_episodes: Optional[int] = None
-    ) -> Dict[str, Any]:
+    # ------------------------------------------------------------------ #
+    # 实时抓取：增量沉淀
+    # ------------------------------------------------------------------ #
+    def record_turns(self, target_name: str, raw_turns: List[Dict[str, Any]], time_hint: Optional[str] = None) -> Dict[str, Any]:
         """
-        全量/历史对话流按时间段智能切片脱水归档:
-        - 按会话沉默间隔 (> 2小时) 自动切片为一个独立事件 (Episode)
-        - 跨天或话题转移自然归纳
-        - 自动提取实体、动态主题、双方事实
-        - 强幂等防重复：校验 checkpoint.json 与 SQLite 已录入事件
-        - 写入 contacts/{target_name}/episodes.md 和 index.db
-        - 阅后即析构原始消息 (Chatless)
+        将实时抓取到的轮次 (role=EGO/TARGET) 中尚未沉淀过的发言写入记忆:
+        - 区分我方与对方发言，合并为一个事件
+        - 指纹 + 已有事实双重去重，手动抓取 / 自动循环反复抓到同一屏也只记录一次
         """
-        import json
-        import hashlib
-
-        if not messages:
-            return {"status": "empty_messages", "episodes_added": 0}
-
-        sandbox_dir = os.path.join(self.contacts_dir, target_name)
-        os.makedirs(sandbox_dir, exist_ok=True)
-
-        episodes_path = os.path.join(sandbox_dir, "episodes.md")
-        if not os.path.exists(episodes_path):
-            with open(episodes_path, "w", encoding="utf-8") as f:
-                f.write(f"# {target_name} 历史事实故事流 (Chatless)\n\n")
-
-        db_path = os.path.join(sandbox_dir, "index.db")
-        self._ensure_sqlite_tables(db_path)
-
-        checkpoint_path = os.path.join(sandbox_dir, "checkpoint.json")
-        recorded_hashes = set()
-        if os.path.exists(checkpoint_path):
-            try:
-                with open(checkpoint_path, "r", encoding="utf-8") as f:
-                    cp_data = json.load(f)
-                    recorded_hashes = set(cp_data.get("recorded_hashes", []))
-            except Exception:
-                pass
-
-        # 查询 SQLite 中已存在的事件日期以防重复追加
-        existing_episode_dates = set()
-        try:
-            conn = sqlite3.connect(db_path)
-            cur = conn.cursor()
-            cur.execute("SELECT episode_date FROM episode_records")
-            existing_episode_dates = set(r[0] for r in cur.fetchall())
-            conn.close()
-        except Exception:
-            pass
-
-        # 确保按时间顺序升序排列
-        sorted_msgs = sorted(messages, key=lambda m: m.timestamp)
-
-        # 1. 对话流按时间空档智能切片
-        sessions: List[List[ChatMessage]] = []
-        current_session: List[ChatMessage] = []
-
-        for m in sorted_msgs:
-            if not current_session:
-                current_session.append(m)
-            else:
-                gap = (m.timestamp - current_session[-1].timestamp).total_seconds()
-                is_cross_day = (m.timestamp.date() != current_session[-1].timestamp.date() and gap > 3600)
-                if gap > session_gap_seconds or is_cross_day:
-                    sessions.append(current_session)
-                    current_session = [m]
-                else:
-                    current_session.append(m)
-        if current_session:
-            sessions.append(current_session)
-
-        # 2. 逐事件脱水提炼
-        episodes_to_add: List[FactEpisode] = []
-
-        for sess in sessions:
-            # 过滤纯占位符和无效短句
-            valid_turns = []
-            for m in sess:
-                txt = m.content.strip()
-                if len(txt) < 2:
-                    continue
-                if txt in ("[图片]", "[语音]", "[视频]", "[动画表情]", "[表情]", "[语音/视频通话]"):
-                    continue
-                role_label = "EGO" if m.role == "me" else "TARGET"
-                h = hashlib.md5(f"{role_label}::{txt}".encode("utf-8")).hexdigest()
-                valid_turns.append((h, m))
-
-            if not valid_turns:
-                continue
-
-            # 若该事件中所有发言均已被 checkpoint 记录过，跳过
-            unseen = [t for t in valid_turns if t[0] not in recorded_hashes]
-            if not unseen and len(valid_turns) > 0:
-                continue
-
-            session_time_str = sess[0].timestamp.strftime("%Y-%m-%d %H:%M")
-            if session_time_str in existing_episode_dates:
-                for h, _ in valid_turns:
-                    recorded_hashes.add(h)
-                continue
-
-            # 语义分析与动态实体/主题提炼
-            all_text = " ".join([m.content for _, m in valid_turns])
-            entities, theme = self._extract_dynamic_entities_and_theme(target_name, all_text, sandbox_dir)
-
-            # 提炼双方核心事实 (按出现顺序归纳代表性句子，最多 6 条)
-            facts = []
-            target_msgs = [m.content for _, m in valid_turns if m.role == "target"]
-            ego_msgs = [m.content for _, m in valid_turns if m.role == "me"]
-
-            last_role = None
-            buf = []
-            for _, m in valid_turns:
-                role_name = "我" if m.role == "me" else target_name
-                if last_role is None:
-                    last_role = role_name
-                    buf.append(m.content)
-                elif last_role == role_name:
-                    if len(buf) < 3 and len(m.content) < 30:
-                        buf.append(m.content)
-                else:
-                    facts.append(f"{last_role}: {' '.join(buf)}")
-                    last_role = role_name
-                    buf = [m.content]
-                if len(facts) >= 6:
-                    break
-            if buf and len(facts) < 6:
-                facts.append(f"{last_role}: {' '.join(buf)}")
-
-            if not facts:
-                facts = ["日常互动与碎语交流"]
-
-            # 关系动态判定
-            if target_msgs and ego_msgs:
-                dynamic = "双方完成一轮日常互动交流"
-            elif target_msgs:
-                dynamic = f"{target_name}主动分享生活动态与话题"
-            else:
-                dynamic = "我方主动回复关照"
-
-            episode = FactEpisode(
-                episode_date=session_time_str,
-                theme=theme,
-                entities=entities,
-                facts=facts[:6],
-                relationship_dynamic=dynamic
-            )
-            episodes_to_add.append(episode)
-            existing_episode_dates.add(session_time_str)
-
-            for h, _ in valid_turns:
-                recorded_hashes.add(h)
-
-            if max_episodes and len(episodes_to_add) >= max_episodes:
-                break
-
-        # 3. 批量持久化到 episodes.md
-        if episodes_to_add:
-            with open(episodes_path, "a", encoding="utf-8") as f:
-                for ep in episodes_to_add:
-                    f.write(f"\n## [{ep.episode_date}] {ep.theme}\n")
-                    f.write(f"- **涉及实体**：{ep.entities}\n")
-                    f.write("- **发生事实**：\n")
-                    for idx, fact in enumerate(ep.facts, start=1):
-                        f.write(f"  {idx}. {fact}\n")
-                    f.write(f"- **关系动态**：{ep.relationship_dynamic}\n")
-
-            # 4. 批量写入 SQLite index.db
-            self._batch_index_episodes(db_path, episodes_to_add)
-
-        # 5. 更新 checkpoint.json
-        trimmed_hashes = list(recorded_hashes)
-        if len(trimmed_hashes) > 10000:
-            trimmed_hashes = trimmed_hashes[-10000:]
-        cp_data = {
-            "last_checkpoint_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "last_time_hint": episodes_to_add[-1].episode_date if episodes_to_add else "",
-            "recorded_hashes": trimmed_hashes
-        }
-        with open(checkpoint_path, "w", encoding="utf-8") as f:
-            json.dump(cp_data, f, ensure_ascii=False, indent=2)
-
-        return {
-            "status": "success",
-            "target_name": target_name,
-            "total_messages": len(messages),
-            "total_sessions": len(sessions),
-            "episodes_added": len(episodes_to_add)
-        }
-
-    def _ensure_sqlite_tables(self, db_path: str):
-        conn = sqlite3.connect(db_path)
-        cur = conn.cursor()
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS episode_records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            episode_date TEXT NOT NULL,
-            theme TEXT NOT NULL,
-            entities_blob TEXT NOT NULL,
-            facts_summary TEXT NOT NULL,
-            relationship_dynamic TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS entity_inverted_index (
-            entity_name TEXT NOT NULL,
-            episode_id INTEGER NOT NULL,
-            weight REAL DEFAULT 1.0,
-            PRIMARY KEY (entity_name, episode_id)
-        );
-        """)
-        conn.commit()
-        conn.close()
-
-    def _batch_index_episodes(self, db_path: str, episodes: List[FactEpisode]):
-        try:
-            conn = sqlite3.connect(db_path)
-            cur = conn.cursor()
-            for episode in episodes:
-                entities_blob = ", ".join(episode.entities)
-                facts_str = "; ".join(episode.facts)
-                cur.execute("""
-                INSERT INTO episode_records (episode_date, theme, entities_blob, facts_summary, relationship_dynamic)
-                VALUES (?, ?, ?, ?, ?)
-                """, (episode.episode_date, episode.theme, entities_blob, facts_str, episode.relationship_dynamic))
-                ep_id = cur.lastrowid
-                for ent in episode.entities:
-                    cur.execute("""
-                    INSERT OR REPLACE INTO entity_inverted_index (entity_name, episode_id, weight)
-                    VALUES (?, ?, 1.0)
-                    """, (ent, ep_id))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"[Batch Index Error] {e}")
-
-    def distill_turn_incremental(self, target_name: str, raw_turns: List[Dict[str, Any]], time_hint: Optional[str] = None) -> Dict[str, Any]:
-        """
-        按增量抓取上一次记忆时间点到现在的所有信息:
-        - 区分哪些是我说的，哪些是对方说的
-        - 分别蒸馏整理录入到 episodes.md 和 SQLite index.db
-        - 强幂等防重复
-        """
-        import json
-        import hashlib
-
         if not raw_turns:
             return {"status": "empty_turns", "new_count": 0}
 
-        sandbox_dir = os.path.join(self.contacts_dir, target_name)
-        if not os.path.exists(sandbox_dir):
+        sandbox_dir = store.contact_dir(target_name, self.contacts_dir)
+        if not os.path.isdir(sandbox_dir):
             return {"status": "error", "message": f"联系人 {target_name} 沙盒不存在"}
 
-        checkpoint_path = os.path.join(sandbox_dir, "checkpoint.json")
-        recorded_hashes = set()
-        last_checkpoint_time = ""
-        if os.path.exists(checkpoint_path):
-            try:
-                with open(checkpoint_path, "r", encoding="utf-8") as f:
-                    cp_data = json.load(f)
-                    recorded_hashes = set(cp_data.get("recorded_hashes", []))
-                    last_checkpoint_time = cp_data.get("last_checkpoint_time", "")
-            except Exception:
-                pass
+        with store.write_lock:
+            recorded_hashes, last_checkpoint_time = self._load_checkpoint(sandbox_dir)
+            recorded_set = set(recorded_hashes)
+            existing_facts = self._recent_fact_texts(target_name)
 
-        # 深度防重：查询 SQLite index.db 最近已沉淀的事实文本，绝不重复录入
-        db_path = os.path.join(sandbox_dir, "index.db")
-        existing_facts_corpus = ""
-        if os.path.exists(db_path):
-            try:
-                import sqlite3
-                conn = sqlite3.connect(db_path)
-                cur = conn.cursor()
-                cur.execute("SELECT facts_summary FROM episode_records ORDER BY id DESC LIMIT 30")
-                existing_facts_corpus = " ".join([r[0] for r in cur.fetchall()])
-                conn.close()
-            except Exception:
-                pass
+            new_turns: List[Tuple[str, Dict[str, Any]]] = []
+            for t in raw_turns:
+                role = t.get("role", "")
+                text = (t.get("text") or "").strip()
+                if role not in ("EGO", "TARGET") or len(text) < 2:
+                    continue
+                if any(k in text.lower() for k in _NOISE_PATTERNS):
+                    continue
+                if not re.search(r"[\u4e00-\u9fa5a-zA-Z0-9]", text):
+                    continue
+                h = turn_hash(role, text)
+                if h in recorded_set:
+                    continue
+                # 指纹丢失 (如 checkpoint 被截断) 时，以已沉淀事实逐句精确比对兜底
+                if all(line.strip() in existing_facts for line in text.split("\n") if line.strip()):
+                    recorded_hashes.append(h)
+                    recorded_set.add(h)
+                    continue
+                new_turns.append((h, t))
+                recorded_set.add(h)
 
-        noise_patterns = [
-            "按 Esc", "小胶囊", "点击复制", "抓取最新", "导入建档",
-            "send", "发送", "口*、心", "uu.l", "曰％", "已发出"
-        ]
+            if not new_turns:
+                self._save_checkpoint(sandbox_dir, recorded_hashes, None)
+                return {"status": "unchanged", "new_count": 0, "last_checkpoint_time": last_checkpoint_time}
 
-        new_turns = []
-        for t in raw_turns:
-            role = t.get("role", "")
-            text = t.get("text", "").strip()
-            if not text or len(text) < 2:
-                continue
-            if any(k in text.lower() for k in noise_patterns):
-                continue
-            if not re.search(r"[\u4e00-\u9fa5a-zA-Z0-9]", text):
-                continue
+            target_new = [t for _, t in new_turns if t["role"] == "TARGET"]
+            ego_new = [t for _, t in new_turns if t["role"] == "EGO"]
+            all_text = " ".join(t["text"] for _, t in new_turns)
+            entities, theme = self._extract_dynamic_entities_and_theme(target_name, all_text, sandbox_dir)
 
-            t_hash = hashlib.md5(f"{role}::{text}".encode("utf-8")).hexdigest()
-            # 1. 检查哈希记录
-            if t_hash in recorded_hashes:
-                continue
-            # 2. 检查数据库历史事实库 (防止重启或不同客户端导致哈希失效)
-            if existing_facts_corpus and text in existing_facts_corpus:
-                recorded_hashes.add(t_hash)
-                continue
+            # 按真实先后顺序记录双方事实
+            facts = []
+            for _, t in new_turns:
+                speaker = "我" if t["role"] == "EGO" else target_name
+                facts.extend(f"{speaker}: {line.strip()}" for line in t["text"].split("\n") if len(line.strip()) >= 2)
+            if not facts:
+                facts = ["完成日常生活交流"]
 
-            new_turns.append((t_hash, t))
+            if ego_new and target_new:
+                dynamic = "双方完成一轮日常互动问答"
+            elif ego_new:
+                dynamic = "我方主动回复关照"
+            else:
+                dynamic = f"{target_name}主动抛出新话题"
 
-        if not new_turns:
-            return {"status": "unchanged", "new_count": 0, "last_checkpoint_time": last_checkpoint_time}
-
-        target_new = [t for _, t in new_turns if t.get("role") == "TARGET"]
-        ego_new = [t for _, t in new_turns if t.get("role") == "EGO"]
-
-        all_text = " ".join([t["text"] for _, t in new_turns])
-
-        # 动态实体与主题发现
-        entities, theme = self._extract_dynamic_entities_and_theme(target_name, all_text, sandbox_dir)
-
-        # 分别提炼双方事实
-        facts = []
-        for item in target_new:
-            for line in item["text"].split("\n"):
-                line_clean = line.strip()
-                if line_clean and len(line_clean) >= 2:
-                    facts.append(f"{target_name}: {line_clean}")
-        for item in ego_new:
-            for line in item["text"].split("\n"):
-                line_clean = line.strip()
-                if line_clean and len(line_clean) >= 2:
-                    facts.append(f"我: {line_clean}")
-
-        if not facts:
-            facts = ["完成日常生活交流"]
-
-        now_str = datetime.now().strftime("%Y-%m-%d")
-        time_display = time_hint or datetime.now().strftime("%H:%M")
-        dynamic = "保持高默契互动与即时响应"
-        if ego_new and target_new:
-            dynamic = "双方完成一轮日常互动问答"
-        elif ego_new:
-            dynamic = "我方主动回复关照"
-        elif target_new:
-            dynamic = f"{target_name}主动抛出新话题"
-
-        # 写入 episodes.md
-        episodes_path = os.path.join(sandbox_dir, "episodes.md")
-        with open(episodes_path, "a", encoding="utf-8") as f:
-            f.write(f"\n## [{now_str} {time_display}] {theme}\n")
-            f.write(f"- **涉及实体**：{entities}\n")
-            f.write("- **发生事实**：\n")
-            for idx, fact in enumerate(facts[:8], start=1):
-                f.write(f"  {idx}. {fact}\n")
-            f.write(f"- **关系动态**：{dynamic}\n")
-
-        # 写入 SQLite index.db
-        db_path = os.path.join(sandbox_dir, "index.db")
-        episode = FactEpisode(
-            episode_date=f"{now_str} {time_display}",
-            theme=theme,
-            entities=entities,
-            facts=facts[:8],
-            relationship_dynamic=dynamic
-        )
-        self._index_episode(db_path, episode)
-
-        # 更新 checkpoint.json
-        for h, _ in new_turns:
-            recorded_hashes.add(h)
-        cp_data = {
-            "last_checkpoint_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "last_time_hint": time_display,
-            "recorded_hashes": list(recorded_hashes)
-        }
-        with open(checkpoint_path, "w", encoding="utf-8") as f:
-            json.dump(cp_data, f, ensure_ascii=False, indent=2)
+            time_display = time_hint or datetime.now().strftime("%H:%M")
+            episode = FactEpisode(
+                episode_date=f"{datetime.now():%Y-%m-%d} {time_display}",
+                theme=theme,
+                entities=entities,
+                facts=facts[:8],
+                relationship_dynamic=dynamic
+            )
+            self._persist_episodes(target_name, sandbox_dir, [episode])
+            recorded_hashes.extend(h for h, _ in new_turns)
+            self._save_checkpoint(sandbox_dir, recorded_hashes, time_display)
 
         return {
             "status": "recorded",
@@ -476,6 +124,189 @@ class EpisodicDistiller:
             "time_hint": time_display
         }
 
+    # ------------------------------------------------------------------ #
+    # 历史导入：按会话切片批量沉淀
+    # ------------------------------------------------------------------ #
+    def distill_history_stream(
+        self,
+        target_name: str,
+        messages: List[ChatMessage],
+        session_gap_seconds: int = 7200,
+        max_episodes: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        全量/历史对话流按时间段智能切片归档:
+        - 按会话沉默间隔 (> 2小时) 或跨天自动切片为独立事件 (Episode)
+        - 只对尚未沉淀过的发言 (checkpoint 指纹) 生成事实，重复导入不会重复写入
+        """
+        if not messages:
+            return {"status": "empty_messages", "episodes_added": 0}
+
+        sandbox_dir = store.contact_dir(target_name, self.contacts_dir)
+        os.makedirs(sandbox_dir, exist_ok=True)
+
+        with store.write_lock:
+            recorded_hashes, _ = self._load_checkpoint(sandbox_dir)
+            recorded_set = set(recorded_hashes)
+
+            # 1. 对话流按时间空档智能切片
+            sessions: List[List[ChatMessage]] = []
+            for m in sorted(messages, key=lambda m: m.timestamp):
+                if sessions:
+                    prev = sessions[-1][-1]
+                    gap = (m.timestamp - prev.timestamp).total_seconds()
+                    is_cross_day = m.timestamp.date() != prev.timestamp.date() and gap > 3600
+                    if gap <= session_gap_seconds and not is_cross_day:
+                        sessions[-1].append(m)
+                        continue
+                sessions.append([m])
+
+            # 2. 逐事件提炼 (仅使用未沉淀过的发言)
+            episodes_to_add: List[FactEpisode] = []
+            new_hashes: List[str] = []
+            for sess in sessions:
+                fresh: List[ChatMessage] = []
+                for m in sess:
+                    txt = m.content.strip()
+                    if len(txt) < 2 or txt in _PLACEHOLDER_MESSAGES:
+                        continue
+                    h = turn_hash("EGO" if m.role == "me" else "TARGET", txt)
+                    if h in recorded_set:
+                        continue
+                    recorded_set.add(h)
+                    new_hashes.append(h)
+                    fresh.append(m)
+                if not fresh:
+                    continue
+
+                all_text = " ".join(m.content for m in fresh)
+                entities, theme = self._extract_dynamic_entities_and_theme(target_name, all_text, sandbox_dir)
+
+                # 提炼双方核心事实 (同一人连续短句合并，最多 6 条)
+                facts: List[str] = []
+                last_role, buf = None, []
+                for m in fresh:
+                    role_name = "我" if m.role == "me" else target_name
+                    if role_name == last_role:
+                        if len(buf) < 3 and len(m.content) < 30:
+                            buf.append(m.content)
+                        continue
+                    if last_role is not None:
+                        facts.append(f"{last_role}: {' '.join(buf)}")
+                        if len(facts) >= 6:
+                            buf = []
+                            break
+                    last_role, buf = role_name, [m.content]
+                if buf and len(facts) < 6:
+                    facts.append(f"{last_role}: {' '.join(buf)}")
+
+                has_target = any(m.role != "me" for m in fresh)
+                has_ego = any(m.role == "me" for m in fresh)
+                if has_target and has_ego:
+                    dynamic = "双方完成一轮日常互动交流"
+                elif has_target:
+                    dynamic = f"{target_name}主动分享生活动态与话题"
+                else:
+                    dynamic = "我方主动回复关照"
+
+                episodes_to_add.append(FactEpisode(
+                    episode_date=fresh[0].timestamp.strftime("%Y-%m-%d %H:%M"),
+                    theme=theme,
+                    entities=entities,
+                    facts=facts or ["日常互动与碎语交流"],
+                    relationship_dynamic=dynamic
+                ))
+                if max_episodes and len(episodes_to_add) >= max_episodes:
+                    break
+
+            if episodes_to_add:
+                self._persist_episodes(target_name, sandbox_dir, episodes_to_add)
+            recorded_hashes.extend(new_hashes)
+            self._save_checkpoint(sandbox_dir, recorded_hashes, episodes_to_add[-1].episode_date if episodes_to_add else None)
+
+        return {
+            "status": "success",
+            "target_name": target_name,
+            "total_messages": len(messages),
+            "total_sessions": len(sessions),
+            "episodes_added": len(episodes_to_add)
+        }
+
+    # ------------------------------------------------------------------ #
+    # 持久化与 checkpoint
+    # ------------------------------------------------------------------ #
+    def _persist_episodes(self, target_name: str, sandbox_dir: str, episodes: List[FactEpisode]) -> None:
+        """追加写入 episodes.md 并同步建立 index.db 倒排索引 (调用方需持有 write_lock)"""
+        episodes_path = os.path.join(sandbox_dir, "episodes.md")
+        is_new = not os.path.exists(episodes_path)
+        with open(episodes_path, "a", encoding="utf-8") as f:
+            if is_new:
+                f.write(f"# {target_name} 历史事实故事流\n\n")
+            for ep in episodes:
+                f.write(f"\n## [{ep.episode_date}] {ep.theme}\n")
+                f.write(f"- **涉及实体**：{ep.entities}\n")
+                f.write("- **发生事实**：\n")
+                for idx, fact in enumerate(ep.facts, start=1):
+                    f.write(f"  {idx}. {fact}\n")
+                f.write(f"- **关系动态**：{ep.relationship_dynamic}\n")
+
+        with store.connect(target_name, self.contacts_dir, create=True) as conn:
+            for ep in episodes:
+                cur = conn.execute("""
+                    INSERT INTO episode_records (episode_date, theme, entities_blob, facts_summary, relationship_dynamic)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (ep.episode_date, ep.theme, ", ".join(ep.entities), "; ".join(ep.facts), ep.relationship_dynamic))
+                conn.executemany("""
+                    INSERT OR REPLACE INTO entity_inverted_index (entity_name, episode_id, weight)
+                    VALUES (?, ?, 1.0)
+                """, [(ent, cur.lastrowid) for ent in ep.entities])
+
+    def _recent_fact_texts(self, target_name: str, limit: int = 30) -> set:
+        """最近若干事件中的事实正文 (去掉 "说话人: " 前缀)，用于指纹缺失时的精确去重"""
+        texts = set()
+        try:
+            with store.connect(target_name, self.contacts_dir) as conn:
+                if conn is None:
+                    return texts
+                for (summary,) in conn.execute(
+                    "SELECT facts_summary FROM episode_records ORDER BY id DESC LIMIT ?", (limit,)
+                ):
+                    for part in summary.split("; "):
+                        texts.add(part.split(": ", 1)[-1].strip())
+        except Exception as e:
+            logger.error("[Recent Facts Error] %s", e)
+        return texts
+
+    @staticmethod
+    def _load_checkpoint(sandbox_dir: str) -> Tuple[List[str], str]:
+        path = os.path.join(sandbox_dir, "checkpoint.json")
+        if not os.path.exists(path):
+            return [], ""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return list(data.get("recorded_hashes", [])), data.get("last_checkpoint_time", "")
+        except Exception as e:
+            logger.warning("[Checkpoint Load Warning] %s", e)
+            return [], ""
+
+    @staticmethod
+    def _save_checkpoint(sandbox_dir: str, recorded_hashes: List[str], last_time_hint: Optional[str]) -> None:
+        """按写入顺序只保留最新的指纹；先写临时文件再原子替换，避免中途崩溃损坏 checkpoint"""
+        path = os.path.join(sandbox_dir, "checkpoint.json")
+        data = {
+            "last_checkpoint_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "last_time_hint": last_time_hint or "",
+            "recorded_hashes": list(dict.fromkeys(recorded_hashes))[-MAX_CHECKPOINT_HASHES:]
+        }
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+
+    # ------------------------------------------------------------------ #
+    # 实体与主题提炼
+    # ------------------------------------------------------------------ #
     def _extract_dynamic_entities_and_theme(
         self,
         target_name: str,
@@ -549,60 +380,3 @@ class EpisodicDistiller:
             theme = "天气变化与日常关切"
 
         return entities, theme
-
-    def _extract_episode_facts(
-        self,
-        target_name: str,
-        messages: List[ChatMessage],
-        sandbox_dir: Optional[str] = None
-    ) -> FactEpisode:
-        date_str = messages[-1].timestamp.strftime("%Y-%m-%d")
-        all_text = " ".join([m.content for m in messages])
-
-        # 动态提取实体与主题
-        entities, theme = self._extract_dynamic_entities_and_theme(target_name, all_text, sandbox_dir)
-
-        facts = []
-        for m in messages:
-            content_clean = m.content.strip()
-            if len(content_clean) >= 2:
-                if any(k in content_clean for k in ["按 Esc", "小胶囊", "点击复制"]):
-                    continue
-                facts.append(f"{m.sender_name}: {content_clean}")
-        if not facts:
-            facts = ["完成日常生活碎语交换"]
-
-        dynamic = "保持高默契互动与即时响应"
-
-        return FactEpisode(
-            episode_date=date_str,
-            theme=theme,
-            entities=entities,
-            facts=facts[:5],
-            relationship_dynamic=dynamic
-        )
-
-    def _index_episode(self, db_path: str, episode: FactEpisode):
-        try:
-            conn = sqlite3.connect(db_path)
-            cur = conn.cursor()
-
-            entities_blob = ", ".join(episode.entities)
-            facts_str = "; ".join(episode.facts)
-
-            cur.execute("""
-            INSERT INTO episode_records (episode_date, theme, entities_blob, facts_summary, relationship_dynamic)
-            VALUES (?, ?, ?, ?, ?)
-            """, (episode.episode_date, episode.theme, entities_blob, facts_str, episode.relationship_dynamic))
-            episode_id = cur.lastrowid
-
-            for ent in episode.entities:
-                cur.execute("""
-                INSERT OR REPLACE INTO entity_inverted_index (entity_name, episode_id, weight)
-                VALUES (?, ?, 1.0)
-                """, (ent, episode_id))
-
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"[Index Episode Error] {e}")

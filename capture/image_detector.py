@@ -3,21 +3,21 @@ Image Detector & Multimodal Interpreter for WeChat chat bubbles.
 Detects image/photo bubbles in WeChat chat area and interprets them into
 concise, high-EQ semantic descriptions [图片: {description}] using VLM with MD5 caching.
 """
+import logging
 import os
 import io
 import re
-import json
-import ssl
 import hashlib
 import base64
-import urllib.request
-import urllib.error
 from typing import List, Dict, Any, Optional
 from PIL import Image
 
 import Vision
 from Foundation import NSURL, NSDictionary
 import config
+from core import llm_client
+
+logger = logging.getLogger(__name__)
 
 _IMAGE_CACHE: Dict[str, str] = {}
 
@@ -41,8 +41,8 @@ def calculate_image_variance(pil_crop: Image.Image) -> float:
     return (var_r + var_g + var_b) ** 0.5
 
 def describe_image_via_vlm(pil_crop: Image.Image) -> Optional[str]:
-    """调用多模态大模型对图片进行大白话视觉描述 (带缩放压缩优化)"""
-    if not config.LLM_API_KEY:
+    """调用多模态大模型对图片进行大白话视觉描述 (仅在配置了 LLM_VISION_MODEL 时启用)"""
+    if not (llm_client.is_enabled() and config.LLM_VISION_MODEL):
         return None
 
     # 缩放至最大 380px，既清晰又轻量极速
@@ -68,45 +68,25 @@ def describe_image_via_vlm(pil_crop: Image.Image) -> Optional[str]:
         "请用一句话简明扼要地描述画面的核心主体与视觉重点（例如：'一只手捏着黄色黏土小人'、'试衣镜前米白色开衫配牛仔裤穿搭'、'一盘刚出炉的战斧牛排'、'一只可爱的金毛幼犬在草地上打滚'、'小红书关于露营推荐的图文笔记截图'）。\n"
         "要求：大白话、直接提炼核心主体，严禁包含任何前缀客套（不要写'这是一张...'或'图中显示...'），字数控制在15~25字以内。如果是纯色空白背景则回复NONE。"
     )
-
-    url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {config.LLM_API_KEY}"
-    }
-    body = {
-        "model": config.LLM_MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_str}"}}
-                ]
-            }
-        ],
-        "temperature": 0.2,
-        "max_tokens": 40
-    }
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_str}"}}
+        ]
+    }]
 
     try:
-        import certifi
-        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-    except Exception:
-        ssl_ctx = ssl._create_unverified_context()
-
-    try:
-        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, context=ssl_ctx, timeout=4.5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            desc = data["choices"][0]["message"]["content"].strip()
-            if not desc or "NONE" in desc.upper():
-                return None
-            desc = re.sub(r"^(这是一张|图中是|画面显示|照片中是)", "", desc).strip()
-            _IMAGE_CACHE[img_hash] = desc
-            return desc
+        desc = llm_client.chat_completion(
+            messages, temperature=0.2, max_tokens=40, timeout=4.5, model=config.LLM_VISION_MODEL
+        )
+        if not desc or "NONE" in desc.upper():
+            return None
+        desc = re.sub(r"^(这是一张|图中是|画面显示|照片中是)", "", desc).strip()
+        _IMAGE_CACHE[img_hash] = desc
+        return desc
     except Exception as e:
-        print(f"[VLM Image Describe Warning] {e}")
+        logger.warning("[VLM Image Describe Warning] %s", e)
         return None
 
 def fallback_macos_vision_classify(crop_path: str) -> Optional[str]:
@@ -155,7 +135,8 @@ def is_wechat_green_bubble(pil_crop: Image.Image) -> bool:
 def detect_chat_image_bubbles(
     cropped_img: Image.Image,
     crop_file_path: str,
-    known_text_boxes: Optional[List[dict]] = None
+    known_text_boxes: Optional[List[dict]] = None,
+    work_dir: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     探测聊天视口中的真实照片/图片气泡，并转化为语义文本元素:
@@ -239,7 +220,7 @@ def detect_chat_image_bubbles(
         # 7. 调用多模态描述
         desc = describe_image_via_vlm(pil_crop)
         if not desc:
-            tmp_crop_path = f"/tmp/echolens_img_crop_{bx}_{by}.jpg"
+            tmp_crop_path = os.path.join(work_dir or config.private_tmp_dir(), f"img_crop_{bx}_{by}.jpg")
             pil_crop.convert("RGB").save(tmp_crop_path, "JPEG")
             desc = fallback_macos_vision_classify(tmp_crop_path)
 

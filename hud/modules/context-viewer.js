@@ -120,7 +120,7 @@ class ContextViewer {
     showMismatchAlert(detected, target) {
         if (!this.incomingMessageBox) return;
         const originalText = this.lastIncomingText || this.incomingMessageBox.textContent;
-        this.incomingMessageBox.innerHTML = `<span style="color:#f87171;font-weight:600;">【安全阻断】当前微信停留在「${detected}」，非目标「${target}」！<br>请在微信中切换至目标聊天窗口后再点击抓取。</span>`;
+        this.incomingMessageBox.innerHTML = `<span style="color:#f87171;font-weight:600;">【安全阻断】当前微信停留在「${escapeHtml(detected)}」，非目标「${escapeHtml(target)}」！<br>请在微信中切换至目标聊天窗口后再点击抓取。</span>`;
         setTimeout(() => {
             if (this.incomingMessageBox && this.incomingMessageBox.innerHTML.includes('【安全阻断】')) {
                 this.incomingMessageBox.textContent = originalText;

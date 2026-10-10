@@ -1,9 +1,8 @@
 import os
 import re
 import json
-import urllib.request
-import urllib.error
 import config
+from core import llm_client
 from typing import Dict, Any, Optional
 
 def distill_knowledge_to_playbook(raw_text: str, source_title: Optional[str] = None, knowledge_dir: Optional[str] = None) -> Dict[str, Any]:
@@ -37,74 +36,50 @@ def distill_knowledge_to_playbook(raw_text: str, source_title: Optional[str] = N
         "}"
     )
 
-    url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {config.LLM_API_KEY}"
-    }
-    body = {
-        "model": config.LLM_MODEL,
-        "messages": [
-            {"role": "system", "content": "你只输出严格的单个 JSON 对象，不加任何思考过程或解释说明。"},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.3,
-        "max_tokens": 600
-    }
-
-    import ssl
-    try:
-        import certifi
-        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-    except Exception:
-        ssl_ctx = ssl._create_unverified_context()
+    if not llm_client.is_enabled():
+        return {"status": "error", "message": "未配置 LLM_API_KEY，无法使用 AI 提炼知识卡"}
 
     try:
-        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, context=ssl_ctx, timeout=15.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"]["content"].strip()
-            
-            if content.startswith("```"):
-                content = re.sub(r"^```(?:json)?\n?", "", content)
-                content = re.sub(r"\n?```$", "", content)
-            
-            match = re.search(r"\{.*\}", content, re.DOTALL)
-            if match:
-                content = match.group(0)
-            
-            cleaned_json = re.sub(r',\s*([\]}])', r'\1', content)
-            card = json.loads(cleaned_json, strict=False)
-            
-            if not card.get("title") or not card.get("principle"):
-                return {"status": "error", "message": "AI 提炼结果不完整，请稍后重试"}
+        content = llm_client.chat_completion(
+            [
+                {"role": "system", "content": "你只输出严格的单个 JSON 对象，不加任何思考过程或解释说明。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3, max_tokens=600, timeout=15.0
+        )
+        card = llm_client.extract_json(content)
+        if not isinstance(card, dict):
+            return {"status": "error", "message": "AI 输出无法解析为 JSON，请稍后重试"}
+        if not card.get("title") or not card.get("principle"):
+            return {"status": "error", "message": "AI 提炼结果不完整，请稍后重试"}
 
-            # 读取现有 playbooks
-            playbooks = []
-            if os.path.exists(playbooks_path):
-                try:
-                    with open(playbooks_path, "r", encoding="utf-8") as f:
-                        playbooks = json.load(f)
-                except Exception:
-                    playbooks = []
+        # 读取现有 playbooks
+        playbooks = []
+        if os.path.exists(playbooks_path):
+            try:
+                with open(playbooks_path, "r", encoding="utf-8") as f:
+                    playbooks = json.load(f)
+            except Exception as e:
+                # 读取失败时绝不覆盖写回，避免清空已有策略库
+                return {"status": "error", "message": f"现有 playbooks.json 读取失败，已中止写入: {e}"}
 
-            # 避免 ID 冲突
-            card_id = card.get("id", f"playbook_custom_{len(playbooks)+1}")
-            if any(p.get("id") == card_id for p in playbooks):
-                card_id = f"{card_id}_{len(playbooks)+1}"
-            card["id"] = card_id
+        # 避免 ID 冲突
+        card_id = card.get("id", f"playbook_custom_{len(playbooks)+1}")
+        if any(p.get("id") == card_id for p in playbooks):
+            card_id = f"{card_id}_{len(playbooks)+1}"
+        card["id"] = card_id
 
-            playbooks.append(card)
+        playbooks.append(card)
 
-            # 持久化写回
-            with open(playbooks_path, "w", encoding="utf-8") as f:
-                json.dump(playbooks, f, ensure_ascii=False, indent=2)
+        # 持久化写回
+        with open(playbooks_path, "w", encoding="utf-8") as f:
+            json.dump(playbooks, f, ensure_ascii=False, indent=2)
 
-            return {
-                "status": "success",
-                "message": f"已成功将《{card['title']}》提炼为情景微策略卡并入库！",
-                "card": card,
-                "total_playbooks": len(playbooks)
-            }
+        return {
+            "status": "success",
+            "message": f"已成功将《{card['title']}》提炼为情景微策略卡并入库！",
+            "card": card,
+            "total_playbooks": len(playbooks)
+        }
     except Exception as e:
         return {"status": "error", "message": f"AI 提炼失败: {e}"}

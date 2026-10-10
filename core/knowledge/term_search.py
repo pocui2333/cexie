@@ -8,10 +8,10 @@ Contains ZERO hardcoded private personal data.
 import urllib.request
 import urllib.parse
 import json
-import ssl
 import re
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor
+from core import llm_client
 
 _TERM_CACHE: Dict[str, Optional[Dict[str, str]]] = {}
 
@@ -45,7 +45,7 @@ def _do_api_query(term: str, timeout: float = 1.0) -> Optional[Dict[str, str]]:
     if clean_term in _TERM_CACHE:
         return _TERM_CACHE[clean_term]
 
-    ctx = ssl._create_unverified_context()
+    ctx = llm_client.ssl_context()
     try:
         url = f"https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key={urllib.parse.quote(clean_term)}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -157,7 +157,7 @@ def _calibrate_cognitive_boundary(category: str, abstract: str) -> str:
 
     if any(k in corpus for k in ["化妆", "护肤", "口红", "粉底", "彩妆", "眼影", "防晒", "香水", "女装", "穿搭", "包包", "首饰", "奢侈品", "时尚", "珠宝", "配饰", "宝石", "矿石", "水晶", "玉石", "文玩"]):
         return (
-            "【我方认知边界推断】：非擅长领域（真实北方男生平视视角）。大致知道是穿搭/护肤/饰品品类，但完全不知道细分成分、色号、玄学讲究或复杂工序。\n"
+            "【我方认知边界推断】：穿搭/护肤/饰品类话题。若【我方本体设定】未体现对此在行，则按外行平视视角：大致知道品类，但不清楚细分成分、色号、讲究或复杂工序。\n"
             "【回复与提问铁律】：严禁编造任何虚假成分、工艺或技术参数！严禁装内行！槽位1/2从‘好看、显白、质感酷、显气质、你开心就好’切入；槽位3/6必须采用【高质量好奇提问】，如真诚请教‘这个具体戴哪只手有讲究不’、‘闻起来是偏木质还是花香’，把麦克风交还给对方激发分享欲。"
         )
     elif any(k in corpus for k in ["菜", "小吃", "食材", "餐饮", "饮品", "咖啡", "甜品", "美食", "糕点", "料理"]):
@@ -167,13 +167,13 @@ def _calibrate_cognitive_boundary(category: str, abstract: str) -> str:
         )
     elif any(k in corpus for k in ["运动", "健身", "瑜伽", "普拉提", "跑步", "户外", "徒步", "露营", "骑行", "滑雪", "球类"]):
         return (
-            "【我方认知边界推断】：生活与运动直男视角。\n"
+            "【我方认知边界推断】：运动/户外类话题，以【我方本体设定】中的真实经验为准，未体现在行则按普通爱好者视角。\n"
             "【回复与提问铁律】：知道大概是运动/户外项目，关注对方‘累不累、开不开心、帅不帅、过瘾不过瘾’，严禁假装资深教练指指点点！好奇提问以‘新手体验/下次带带我’为主。"
         )
     elif any(k in corpus for k in ["数码", "硬件", "电脑", "手机", "软件", "算法", "程序", "代码", "机械", "耳机"]):
         return (
-            "【我方认知边界推断】：熟悉与本职领域（研发工程师视角）。\n"
-            "【回复与提问铁律】：懂原理但绝不在日常微信聊天中掉书袋或居高临下当理中客，大白话随性聊实用体验即可。"
+            "【我方认知边界推断】：数码/技术类话题。若【我方本体设定】显示熟悉此领域，可聊实用体验；否则按普通用户视角好奇请教。\n"
+            "【回复与提问铁律】：即便懂行也绝不在日常微信聊天中掉书袋或居高临下当理中客，大白话随性聊实用体验即可。"
         )
     else:
         return (

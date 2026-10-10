@@ -2,6 +2,9 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 
+# 「我方在对方最新消息之后尚未发言」的统一占位文案 (UI 展示与各模块判断共用)
+NO_REPLY = "暂未回复"
+
 @dataclass
 class ChatMessage:
     sender_name: str
@@ -72,27 +75,6 @@ class DualTrackResult:
             "keywords": self.keywords,
             "options": [opt.to_dict() for opt in self.options],
             "timestamp": self.timestamp.isoformat()
-        }
-
-@dataclass
-class IngestSummary:
-    target_name: str
-    total_scanned_files: int
-    total_parsed_messages: int
-    deduplicated_messages: int
-    episodes_created: int
-    time_span_start: Optional[str] = None
-    time_span_end: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "target_name": self.target_name,
-            "total_scanned_files": self.total_scanned_files,
-            "total_parsed_messages": self.total_parsed_messages,
-            "deduplicated_messages": self.deduplicated_messages,
-            "episodes_created": self.episodes_created,
-            "time_span_start": self.time_span_start,
-            "time_span_end": self.time_span_end
         }
 
 @dataclass

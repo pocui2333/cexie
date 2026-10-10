@@ -8,14 +8,13 @@ Contains ZERO hardcoded private personal data.
 """
 import os
 import re
-import ssl
 import time
 import json
-import sqlite3
 import datetime
 import urllib.request
 import urllib.parse
 from typing import Dict, Any, Optional, List
+from core import llm_client, store
 
 _WEATHER_CACHE: Dict[str, Dict[str, Any]] = {}
 
@@ -158,7 +157,7 @@ def get_temporal_context(now: Optional[datetime.datetime] = None) -> Dict[str, s
     # 节气推断 (当天或前后1~2天内)
     term_name = ""
     for (sm, sd, em, ed), tname, tdesc in SOLAR_TERMS_REF:
-        if (month == sm and sd <= day) or (month == em and day <= ed):
+        if (sm, sd) <= (month, day) <= (em, ed):
             term_name = f"{tname} ({tdesc})"
             break
 
@@ -198,17 +197,14 @@ def infer_special_days(target_name: str, contacts_dir: str, now: Optional[dateti
         except Exception:
             pass
 
-    db_path = os.path.join(target_dir, "index.db")
-    if os.path.exists(db_path):
-        try:
-            conn = sqlite3.connect(db_path)
-            cur = conn.cursor()
-            cur.execute("SELECT facts_summary FROM episode_records WHERE facts_summary LIKE '%生日%' OR facts_summary LIKE '%出生%' OR facts_summary LIKE '%纪念日%' LIMIT 10")
-            for r in cur.fetchall():
-                corpus_lines.append(r[0])
-            conn.close()
-        except Exception:
-            pass
+    try:
+        with store.connect(target_name, contacts_dir) as conn:
+            if conn is not None:
+                corpus_lines.extend(r[0] for r in conn.execute(
+                    "SELECT facts_summary FROM episode_records WHERE facts_summary LIKE '%生日%' OR facts_summary LIKE '%出生%' OR facts_summary LIKE '%纪念日%' LIMIT 10"
+                ))
+    except Exception:
+        pass
 
     corpus = " ".join(corpus_lines)
     if not corpus or ("生日" not in corpus and "出生" not in corpus and "纪念日" not in corpus and "在一起" not in corpus):
@@ -286,21 +282,18 @@ def infer_city_and_weather(target_name: str, contacts_dir: str) -> Optional[str]
 
     # 若 dossier 无显式字段，检查历史记录的高频城市
     if not inferred_city:
-        db_path = os.path.join(target_dir, "index.db")
-        if os.path.exists(db_path):
-            try:
-                conn = sqlite3.connect(db_path)
-                cur = conn.cursor()
-                cur.execute("SELECT facts_summary FROM episode_records ORDER BY id DESC LIMIT 30")
-                facts_text = " ".join([r[0] for r in cur.fetchall()])
-                conn.close()
-                for c in MAJOR_CITIES:
-                    # 匹配强上下文关联，如 "在上海", "回北京", "深圳的家"
-                    if re.search(rf"(?:在|去|回|住|生活在|呆在){c}", facts_text):
-                        inferred_city = c
-                        break
-            except Exception:
-                pass
+        try:
+            with store.connect(target_name, contacts_dir) as conn:
+                facts_text = " ".join(r[0] for r in conn.execute(
+                    "SELECT facts_summary FROM episode_records ORDER BY id DESC LIMIT 30"
+                )) if conn is not None else ""
+            for c in MAJOR_CITIES:
+                # 匹配强上下文关联，如 "在上海", "回北京", "深圳的家"
+                if re.search(rf"(?:在|去|回|住|生活在|呆在){c}", facts_text):
+                    inferred_city = c
+                    break
+        except Exception:
+            pass
 
     if not inferred_city:
         return None
@@ -321,7 +314,7 @@ def _get_city_weather(city_cn: str) -> Optional[str]:
             return cached["desc"]
 
     pinyin = CITY_PINYIN_MAP.get(city_cn, city_cn)
-    ctx = ssl._create_unverified_context()
+    ctx = llm_client.ssl_context()
     url = f"https://wttr.in/{urllib.parse.quote(pinyin)}?format=%C+%t"
     req = urllib.request.Request(url, headers={"User-Agent": "curl/7.68.0"})
 

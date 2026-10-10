@@ -1,7 +1,11 @@
+import logging
 import os
 import time
 import subprocess
 from typing import Optional
+from capture.names import is_contact_match
+
+logger = logging.getLogger(__name__)
 
 def ensure_wechat_unminimized():
     """若微信窗口被最小化到 Dock 栏，静默恢复其窗口 (无需置顶夺取焦点)"""
@@ -52,7 +56,7 @@ def find_wechat_main_window_id(expected_target: Optional[str] = None, retry_unmi
                     priority = 0
                     w_name = w.get(kCGWindowName, "") or ""
                     # 若独立单聊窗口名直接命中目标备注，赋予极高优先级
-                    if expected_target and w_name and (expected_target in w_name or w_name in expected_target):
+                    if expected_target and is_contact_match(w_name, expected_target):
                         priority += 1000
                     # 屏幕在显窗口加分
                     if w.get(kCGWindowIsOnscreen, False):
@@ -71,10 +75,10 @@ def find_wechat_main_window_id(expected_target: Optional[str] = None, retry_unmi
             return find_wechat_main_window_id(expected_target=expected_target, retry_unminimize=False)
 
     except Exception as e:
-        print(f"[Window Finder Error] {e}")
+        logger.error("[Window Finder Error] %s", e)
     return None
 
-def capture_window_screenshot(win_id: int, output_path: str = "/tmp/echolens_wc_win.png") -> bool:
+def capture_window_screenshot(win_id: int, output_path: str) -> bool:
     """使用 macOS 原生 screencapture 静默截取指定窗口 (含最小化恢复重试)"""
     try:
         subprocess.run(["screencapture", f"-l{win_id}", "-x", output_path], check=True, timeout=2.5)
@@ -86,5 +90,5 @@ def capture_window_screenshot(win_id: int, output_path: str = "/tmp/echolens_wc_
         subprocess.run(["screencapture", f"-l{win_id}", "-x", output_path], check=True, timeout=2.5)
         return os.path.exists(output_path) and os.path.getsize(output_path) > 5000
     except Exception as e:
-        print(f"[Screenshot Error] {e}")
+        logger.error("[Screenshot Error] %s", e)
         return False
