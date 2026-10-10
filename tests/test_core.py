@@ -12,7 +12,7 @@ from capture.names import is_contact_match
 from capture.wechat_driver import _group_turns, _result_from_turns
 from core import llm_client, store
 from core.contracts import NO_REPLY
-from core.generator.engine import parse_generation_output
+from core.generator.engine import parse_generation_output, select_by_risk_scores
 from core.generator.guardrails import apply_linguistic_guardrails
 from core.knowledge.context_enhancer import get_temporal_context
 from ingestion.episodic_distiller import EpisodicDistiller
@@ -129,6 +129,21 @@ class TurnParsingTest(unittest.TestCase):
         turns = _group_turns(self.els(("TARGET", "赶紧买票", 0.6), ("EGO", "我也不想玩", 0.4)))
         ctx = _result_from_turns(turns, "张伟").dialogue_context
         self.assertEqual(ctx.split("\n"), ["[对方 张伟]: 赶紧买票", "[我]: 我也不想玩"])
+
+
+class RiskScoreSelectTest(unittest.TestCase):
+    def opts(self, n):
+        return [{"label": f"打法{i}", "text": f"回复{i}", "rationale": "r"} for i in range(n)]
+
+    def test_picks_top_four_without_rewriting(self):
+        opts = self.opts(8)
+        picked = select_by_risk_scores(opts, {"scores": [3, 10, 0, 9, "10", 5, 9, 8]})
+        self.assertEqual(picked, [opts[1], opts[4], opts[3], opts[6]])  # 同分按生成顺序
+
+    def test_bad_scores_fall_back_to_first_four(self):
+        opts = self.opts(8)
+        self.assertEqual(select_by_risk_scores(opts, None), opts[:4])
+        self.assertEqual(select_by_risk_scores(opts, {"scores": [1, 2]}), opts[:4])
 
 class DistillerDedupTest(unittest.TestCase):
     def setUp(self):

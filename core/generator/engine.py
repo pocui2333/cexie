@@ -21,12 +21,13 @@ logger = logging.getLogger(__name__)
 
 _SENTIMENT_CACHE: Dict[str, bool] = {}
 
-OPTION_COUNT = 4
+OPTION_COUNT = 4          # 最终展示条数
+CANDIDATE_COUNT = 8       # 模型一次生成的候选条数，按避雷打分选出前 OPTION_COUNT 条
 MAX_INSIGHTS = 4
 
 
 def parse_generation_output(content: str) -> Optional[Dict[str, Any]]:
-    """解析模型输出 {insights, options}；回复条数不足时返回 None 走离线兜底"""
+    """解析模型输出 {insights, risk_alert, options}；候选不足展示条数时返回 None 走离线兜底"""
     parsed = llm_client.extract_json(content, want="object")
     if not isinstance(parsed, dict):
         return None
@@ -43,13 +44,30 @@ def parse_generation_output(content: str) -> Optional[Dict[str, Any]]:
     return {
         "insights": insights[:MAX_INSIGHTS],
         "risk_alert": str(parsed.get("risk_alert") or "").strip(),
-        "options": options[:OPTION_COUNT],
+        "options": options[:CANDIDATE_COUNT],
     }
+
+
+def select_by_risk_scores(options: List[Dict[str, Any]], reviewed: Any, k: int = OPTION_COUNT) -> List[Dict[str, Any]]:
+    """
+    按避雷打分取前 k 条 (只挑选、不改写，保留原话的感觉)；同分按生成顺序。
+    打分结果格式不对时直接取前 k 条。
+    """
+    scores = reviewed.get("scores") if isinstance(reviewed, dict) else None
+    if not isinstance(scores, list) or len(scores) != len(options):
+        return options[:k]
+    def _score(v: Any) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+    ranked = sorted(range(len(options)), key=lambda i: (-_score(scores[i]), i))
+    return [options[i] for i in ranked[:k]]
 
 
 class DualTrackGenerator:
     """
-    4 条回复建议 + 本轮洞察生成引擎 (标签均由模型按当轮对话现起，不设固定槽位)
+    回复建议 + 本轮洞察生成引擎：一次生成 8 条候选，按避雷打分取前 4 条 (标签均由模型按当轮对话现起)
     """
     def __init__(self, ego_dir: str, contacts_dir: str, knowledge_dir: str):
         self.ego_dir = ego_dir
@@ -106,7 +124,9 @@ class DualTrackGenerator:
         if llm_res:
             insights = llm_res["insights"]
             risk_alert = llm_res["risk_alert"]
-            options_data = llm_res["options"]
+            options_data = self._rank_by_risk_alert(
+                risk_alert, llm_res["options"], context_text or text_clean, is_replied, rules
+            )
         else:
             # 离线兜底不编造洞察，前端无洞察时自动隐藏该区域
             insights, risk_alert = [], ""
@@ -132,6 +152,37 @@ class DualTrackGenerator:
             insights=insights,
             risk_alert=risk_alert
         )
+
+    def _rank_by_risk_alert(
+        self, risk_alert: str, options: List[Dict[str, Any]], context_text: str,
+        is_replied: bool, rules: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        避雷打分：生成时模型不会回头核对自己写的避雷，这里让模型逐条给候选打分，
+        取最安全的前 4 条；只挑选不改写。无避雷或打分失败时取前 4 条。
+        """
+        if not risk_alert or len(options) <= OPTION_COUNT:
+            return options[:OPTION_COUNT]
+        stage = "最后一条是【我】发的，这些是我准备接着追加的话" if is_replied else "这些是【我】准备回复对方的话"
+        listing = "\n".join(f"{i}. {o.get('text', '')}" for i, o in enumerate(options, start=1))
+        taboo = list(rules.get("taboo_words", [])) + list(rules.get("banned_phrases", []))
+        taboo_line = f"\n另外这些词也不能出现: {'、'.join(taboo)}" if taboo else ""
+        prompt = (
+            f"你在帮【我】检查微信回复会不会说错话。\n\n"
+            f"【最近对话】(上下文里 [我] 是我方，[对方 xxx] 是聊天对象):\n{context_text}\n\n"
+            f"【本轮避雷】: {risk_alert}{taboo_line}\n\n"
+            f"【候选回复】({stage}):\n{listing}\n\n"
+            "按是否踩雷给每条打 0~10 分：10 = 完全不碰雷区；5 = 擦边、有被误会的风险；0 = 明显踩雷（换个说法变相踩雷也算）。\n"
+            f'严格只输出 JSON：{{"scores": [按原顺序共 {len(options)} 个数字]}}'
+        )
+        try:
+            raw = llm_client.chat_completion(
+                [{"role": "user", "content": prompt}], temperature=0.1, max_tokens=120, timeout=8.0
+            )
+        except Exception as e:
+            logger.warning("[Risk Review Warning] %s", e)
+            return options[:OPTION_COUNT]
+        return select_by_risk_scores(options, llm_client.extract_json(raw, want="object"))
 
     def _filter_style_samples(
         self, ego_utterances: List[str], qa_snippets: List[Dict[str, str]], limit_ego: int = 8, limit_qa: int = 3
@@ -207,7 +258,7 @@ class DualTrackGenerator:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0.7, max_tokens=800, timeout=12.0
+            temperature=0.7, max_tokens=1400, timeout=18.0
         )
 
         return parse_generation_output(content)
