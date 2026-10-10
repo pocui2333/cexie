@@ -976,53 +976,135 @@ html, body {
 }
 
 /* ==========================================================================
-   视图 B: 数据导入与自由建档 (Ingestion View)
+   视图 B: AI 智能数据分析与摄取中心 (Ingestion Hub)
    ========================================================================== */
 #view-ingest {
     height: auto;
     overflow: visible;
-    padding: 10px 12px;
-    gap: 6px;
+    padding: 8px 12px 10px;
+    gap: 7px;
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
 }
 
+.ingest-tabs-bar {
+    display: flex;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 3px;
+    flex-shrink: 0;
+}
+
+.ingest-tab-btn {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 4px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.16s ease;
+    text-align: center;
+}
+
+.ingest-tab-btn:hover:not(.active) {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.ingest-tab-btn.active {
+    background: rgba(56, 189, 248, 0.18);
+    color: #38bdf8;
+    font-weight: 600;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
 .ingest-scroll-container {
-    max-height: 275px;
+    max-height: 290px;
     overflow-y: auto;
     overflow-x: hidden;
     padding-right: 4px;
     box-sizing: border-box;
 }
 
-/* 内部局部优雅滚动条 */
-.ingest-scroll-container::-webkit-scrollbar {
-    width: 5px;
+.label-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
 
-.ingest-scroll-container::-webkit-scrollbar-track {
-    background: transparent;
+.text-link-btn {
+    background: none;
+    border: none;
+    color: #38bdf8;
+    font-size: 10px;
+    cursor: pointer;
+    text-decoration: underline;
+    opacity: 0.85;
+    transition: opacity 0.15s ease;
 }
 
-.ingest-scroll-container::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.16);
-    border-radius: 4px;
+.text-link-btn:hover {
+    opacity: 1;
 }
 
-.ingest-scroll-container::-webkit-scrollbar-thumb:hover {
-    background: rgba(56, 189, 248, 0.5);
+.archetype-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 2px;
 }
 
-.ingest-header {
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--border-subtle);
-    margin-bottom: 2px;
+.arch-chip {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #cbd5e1;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
 }
 
-.view-title {
-    font-size: 12px;
+.arch-chip:hover {
+    background: rgba(56, 189, 248, 0.15);
+    border-color: rgba(56, 189, 248, 0.4);
+    color: #38bdf8;
+}
+
+.arch-chip.selected {
+    background: rgba(56, 189, 248, 0.22);
+    border-color: #38bdf8;
+    color: #fff;
     font-weight: 600;
+}
+
+.dropzone-mini {
+    padding: 6px 8px !important;
+}
+
+.feedback-card {
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 11px;
+    color: #34d399;
+    line-height: 1.4;
+    word-break: break-all;
+    margin-top: 4px;
+}
+
+.feedback-card.error {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.35);
+    color: #f87171;
+}
     color: var(--text-primary);
 }
 

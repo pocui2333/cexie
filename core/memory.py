@@ -75,6 +75,48 @@ class EntityMemoryRetriever:
 
         return matched_episodes
 
+    def get_today_working_memory(self, target_name: str, limit: int = 8) -> List[Dict[str, Any]]:
+        """
+        提取今日进行时工作记忆 (Today's Working Memory):
+        - 强制常驻，不走概率性的 RAG 实体关键词检索
+        - 从 index.db 中抽取当天 (或最近 24 小时) 双方发生的所有事实事件流
+        - 保证全天发生过的话题、经历的事、发过的照片随时可用于延时呼应 (Callback)
+        """
+        sandbox_dir = os.path.join(self.contacts_dir, target_name)
+        db_path = os.path.join(sandbox_dir, "index.db")
+        if not os.path.exists(db_path):
+            return []
+
+        from datetime import datetime, timedelta
+        today_prefix = datetime.now().strftime("%Y-%m-%d")
+        yesterday_prefix = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        today_episodes = []
+        try:
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            # 优先查询今天与昨天的记录，按时间升序还原完整故事线
+            cur.execute("""
+            SELECT id, episode_date, theme, facts_summary, relationship_dynamic
+            FROM episode_records
+            WHERE episode_date LIKE ? OR episode_date LIKE ?
+            ORDER BY episode_date ASC
+            LIMIT ?
+            """, (f"{today_prefix}%", f"{yesterday_prefix}%", limit))
+            for row in cur.fetchall():
+                today_episodes.append({
+                    "id": row[0],
+                    "date": row[1],
+                    "theme": row[2],
+                    "facts": row[3],
+                    "dynamic": row[4]
+                })
+            conn.close()
+        except Exception:
+            pass
+
+        return today_episodes
+
     def load_dossier_summary(self, target_name: str) -> str:
         dossier_path = os.path.join(self.contacts_dir, target_name, "dossier.md")
         if os.path.exists(dossier_path):

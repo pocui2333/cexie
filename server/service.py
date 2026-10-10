@@ -236,7 +236,10 @@ class EchoLensService:
         if context_text is not None:
             self.current_context = context_text
         memory_episodes = self.memory.retrieve_memory(target_name, incoming_text, self.current_context)
-        result = self.generator.generate(target_name, incoming_text, memory_episodes, self.current_context)
+        today_memory = self.memory.get_today_working_memory(target_name)
+        result = self.generator.generate(
+            target_name, incoming_text, memory_episodes, self.current_context, today_memory=today_memory
+        )
         self.cached_options = [opt.to_dict() for opt in result.options]
         self.cached_insight = {
             "subtext": result.subtext,

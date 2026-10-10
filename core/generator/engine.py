@@ -34,7 +34,8 @@ class DualTrackGenerator:
         target_name: str,
         incoming_text: str,
         memory_episodes: List[Dict[str, Any]],
-        context_text: Optional[str] = None
+        context_text: Optional[str] = None,
+        today_memory: Optional[List[Dict[str, Any]]] = None
     ) -> DualTrackResult:
         rules = self._load_rules(target_name)
         text_clean = incoming_text.strip()
@@ -56,7 +57,8 @@ class DualTrackGenerator:
             try:
                 llm_res = self._call_llm(
                     target_name, text_clean, memory_episodes, rules,
-                    context_text, ego_utterances, qa_snippets, calibrated_terms, env_context, knowledge_guidance
+                    context_text, ego_utterances, qa_snippets, calibrated_terms, env_context, knowledge_guidance,
+                    today_memory=today_memory
                 )
             except Exception as e:
                 print(f"[LLM Generate Error] {e}")
@@ -224,7 +226,8 @@ class DualTrackGenerator:
         qa_snippets: Optional[List[Dict[str, str]]] = None,
         calibrated_terms: Optional[List[Dict[str, str]]] = None,
         env_context: Optional[str] = None,
-        knowledge_guidance: Optional[Dict[str, str]] = None
+        knowledge_guidance: Optional[Dict[str, str]] = None,
+        today_memory: Optional[List[Dict[str, Any]]] = None
     ) -> Optional[Dict[str, Any]]:
         import ssl
         try:
@@ -239,7 +242,8 @@ class DualTrackGenerator:
         system_prompt = build_system_prompt(target_name, rules, ego_profile, target_dossier)
         user_prompt = build_user_prompt(
             incoming_text, memory, context_text, target_dossier,
-            ego_utterances, qa_snippets, calibrated_terms, env_context, knowledge_guidance
+            ego_utterances, qa_snippets, calibrated_terms, env_context, knowledge_guidance,
+            today_memory=today_memory
         )
 
         url = f"{config.LLM_BASE_URL.rstrip('/')}/chat/completions"

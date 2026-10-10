@@ -79,6 +79,20 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
                 "episodes": episodes_text,
                 "rules": rules_obj
             })
+
+        elif parsed.path == "/api/playbooks":
+            pb_path = os.path.join(config.KNOWLEDGE_DIR, "playbooks.json")
+            playbooks = []
+            if os.path.exists(pb_path):
+                try:
+                    with open(pb_path, "r", encoding="utf-8") as f:
+                        playbooks = json.load(f)
+                except Exception:
+                    pass
+            self._send_json({
+                "total": len(playbooks),
+                "playbooks": [{"id": p.get("id"), "title": p.get("title"), "category": p.get("category")} for p in playbooks]
+            })
         else:
             super().do_GET()
 
@@ -146,12 +160,43 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
 
         elif parsed.path == "/api/ingest_history":
             target = payload.get("target") or service_instance.state_machine.active_target or get_default_target()
-            folder_path = payload.get("folder_path") or "/Users/mac/微信导出"
+            folder_path = (payload.get("folder_path") or "").strip()
+            if not folder_path:
+                self._send_json({"status": "error", "message": "请提供有效的聊天记录文件夹或文件路径"}, 400)
+                return
             from ingestion.folder_scanner import MultiFormatFolderScanner
             scanner = MultiFormatFolderScanner(target)
             msgs = scanner.scan_path(folder_path)
+            if not msgs:
+                self._send_json({"status": "error", "message": "未能从指定路径解析出有效聊天消息，请核验格式 (支持包含 index.csv 的导出目录、或单文件 CSV/JSON/TXT)"})
+                return
             distill_res = service_instance.distiller.distill_history_stream(target, msgs)
-            self._send_json(distill_res)
+            self._send_json({
+                "status": "success",
+                "target": target,
+                "parsed_messages": len(msgs),
+                "episodes_added": distill_res.get("episodes_added", 0),
+                "message": f"成功为 {target} 增量解析 {len(msgs)} 条消息，沉淀 {distill_res.get('episodes_added', 0)} 个脱水事实故事流！"
+            })
+
+        elif parsed.path == "/api/ingest_knowledge":
+            text = (payload.get("text") or "").strip()
+            source_title = (payload.get("source_title") or "").strip()
+            file_path = (payload.get("file_path") or "").strip()
+            if file_path and os.path.isfile(file_path):
+                try:
+                    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                        text = f.read()
+                    if not source_title:
+                        source_title = os.path.basename(file_path)
+                except Exception as e:
+                    self._send_json({"status": "error", "message": f"读取文件失败: {e}"}, 400)
+                    return
+            from ingestion.knowledge_ingester import distill_knowledge_to_playbook
+            res = distill_knowledge_to_playbook(text, source_title)
+            if res.get("status") == "success":
+                service_instance.generator.knowledge_retriever._load_playbooks()
+            self._send_json(res)
 
         elif parsed.path == "/api/quit":
             self._send_json({"status": "quitting"})

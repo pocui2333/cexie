@@ -153,6 +153,23 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
 
         # 5. 过滤时间标签与日历组件
         filtered_elements = _filter_and_tag_bubbles(obs_list)
+
+        # 5.1 探测聊天视口中的图片/照片气泡并转化为语义描述 (多模态转译与缓存)
+        try:
+            from capture.image_detector import detect_chat_image_bubbles
+            detected_images = detect_chat_image_bubbles(cropped, tmp_crop, known_text_boxes=raw_obs)
+            for img_item in detected_images:
+                filtered_elements.append((
+                    img_item["role"],
+                    img_item["text"],
+                    {"y": img_item["y"], "is_image": True}
+                ))
+            if detected_images:
+                # 重新按 y 轴自上而下排序 (Vision y 坐标倒序，y 越大越靠上)
+                filtered_elements.sort(key=lambda el: -el[2].get("y", 0.0))
+        except Exception as e:
+            print(f"[Image Bubble Ingestion Warning] {e}")
+
         if not filtered_elements:
             return ChatCaptureResult(contact_name=detected_contact, reply_status="pending")
 

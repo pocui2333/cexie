@@ -42,11 +42,23 @@ def build_system_prompt(
 3. 绝对严禁把“直男大白话”演成“刻薄杠精”：
    - 北方爷们的高情商大白话是爽朗、幽默自嘲、会捧哏、心细护短，绝不是粗鲁硬怼或冷漠敷衍（严禁“分开吃多费劲”这种把天聊死的敷衍）！
 
-4. 紧扣对方最新一句话为核心主靶点（严禁翻旧账）：
-   - 必须严格以对方最新发来的这句消息（当前核心情绪与主体内容）为主接球点！
-   - 绝不能无脑翻旧账或焦点漂移（严禁对方明明在开心聊美食/日常/新事物，你却抓住前几轮的旧账大放厥词）！
+4. 紧扣当前情绪核心，积极进行「今日延时呼应/回扣 (Callback)」：
+   - 必须接住对方当前的情绪与分享欲！
+   - 【严禁翻陈年旧账】vs【极度鼓励今日延时呼应 (Callback)】红线划分：
+     * 严禁翻旧账：指对方正在聊今天的新鲜事，你突然无缘无故翻扯几周或几个月前的旧矛盾旧事。
+     * 极度鼓励延时呼应：如果对方最新发来的是高省略度短句、情绪感叹、或看似突兀的一句话（如“好看吗”、“好萌啊”、“辣死我了”、“救命”、“终于完了”、“又困了”）：
+       必须优先结合最新【图片内容】与【今日进行时工作记忆】（今天发生过的事、聊过的话题、发过的照片）进行回扣与呼应！
+       例如对方发黏土手作/视频截图说“跟僵尸一样/哈哈哈哈” -> 顺着黏土小人或造型神态接梗回扣！
+       对方晚上说“终于搞定” -> 回扣早上的汇报！
+       对方说“辣死我了” -> 回扣中午的江西菜！
+       这会让对方感到你把她的每句话都放在心上，形成顶级默契！
 
-5. 【AI 任务：坚决剔除负向历史，只吸纳正向中性语感】：
+5. 针对聊天中出现的【图片】消息处理原则：
+   - 如果对方发送了图片（形如 [图片: xxx]）或配合文字评价图片（如“好看吗”、“可爱吧”、“猜猜在哪”）：
+   - 必须立足提取到的具体视觉细节展开赞美、幽默打趣或好奇提问！
+   - 严禁假装没看见图片，严禁盲目问“什么好看”，必须围绕画面中的具体主体（如衣服颜色款式、宠物神态、美食成色、手工细节）精准给出情绪价值！
+
+6. 【AI 任务：坚决剔除负向历史，只吸纳正向中性语感】：
    - 参考的历史发言或问答切片中若存在任何消极、吐槽、抱怨、泼冷水或负面情绪，AI 必须判定为负向并坚决剔除，严禁参考，严禁被负面带跑偏！
    - 必须始终以积极、温和、提供情绪价值、让对方高兴舒服的正向或中性大白话为主！
 
@@ -120,14 +132,23 @@ def build_user_prompt(
     qa_snippets: Optional[List[Dict[str, str]]] = None,
     calibrated_terms: Optional[List[Dict[str, str]]] = None,
     env_context: Optional[str] = None,
-    knowledge_guidance: Optional[Dict[str, str]] = None
+    knowledge_guidance: Optional[Dict[str, str]] = None,
+    today_memory: Optional[List[Dict[str, Any]]] = None
 ) -> str:
     ctx_section = f"【最近多轮对话上下文】:\n{context_text}\n\n" if context_text else ""
+    
+    today_section = ""
+    if today_memory:
+        t_items = []
+        for m in today_memory:
+            t_items.append(f"  - [{m.get('date', '')}] {m.get('theme', '')}: {m.get('facts', '')}")
+        today_section = "【今日进行时工作记忆 (Today's Working Memory - 强制常驻故事流，优先用于延时呼应/回扣)】:\n" + "\n".join(t_items) + "\n\n"
+
     env_section = f"{env_context}\n" if env_context else ""
     mem_section = ""
     if memory:
         items = [f"- {m.get('date', '')}: {m.get('facts', '')}" for m in memory]
-        mem_section = f"【检索到的相关背景记忆 (仅供参考关系脉络，若与最新话题无关则无需强行引用)】:\n" + "\n".join(items) + "\n\n"
+        mem_section = f"【检索到的历史背景记忆 (仅供参考关系脉络，若与最新话题无关则无需强行引用)】:\n" + "\n".join(items) + "\n\n"
 
     qa_section = ""
     if qa_snippets:
@@ -165,4 +186,4 @@ def build_user_prompt(
             term_blocks.append(block)
         terms_section = "【外部专有名词认知校准与防瞎编指引 (已实时检索外部知识，请据此确定我方合理认知边界，陌生领域以真诚好奇提问切入)】:\n" + "\n\n".join(term_blocks) + "\n\n"
 
-    return f"{ctx_section}{env_section}{knowledge_section}{mem_section}{qa_section}{ego_section}{terms_section}【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n请严格以对方最新这句消息为核心接球点，接住对方的情绪与分享欲，结合当下时空生活背景、高情商策略心法与我方真实认知边界（严禁瞎编配方参数，严禁假装懂行专家，若知识库无关联绝不强行搬扯旧账），条条都要让对方读了开心舒服，输出包含 subtext、risk_alert、keywords 及 options 6 个槽位的严格 JSON 对象，严禁任何 markdown 解释或代码块包裹。"
+    return f"{ctx_section}{today_section}{env_section}{knowledge_section}{mem_section}{qa_section}{ego_section}{terms_section}【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n请严格以对方最新这句消息为核心接球点，接住对方的情绪与分享欲，结合最新图片画面、今日进行时工作记忆（积极做延时呼应/回扣）、当下时空背景与我方真实认知边界，条条都要让对方读了开心舒服，输出包含 subtext、risk_alert、keywords 及 options 6 个槽位的严格 JSON 对象，严禁任何 markdown 解释或代码块包裹。"

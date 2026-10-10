@@ -182,48 +182,112 @@
             </footer>
         </main>
 
-        <!-- 视图 B: 数据导入与自由建档 (Ingestion View) -->
+        <!-- 视图 B: AI 智能数据分析与摄取中心 (Ingestion Hub) -->
         <main id="view-ingest" class="view-panel hidden">
-            <div class="ingest-header">
-                <div class="view-title">联系人档案录入与数据摄取</div>
+            <!-- 摄取中心子标签页导航 -->
+            <div class="ingest-tabs-bar">
+                <button type="button" class="ingest-tab-btn active" data-tab="contact">联系人建档</button>
+                <button type="button" class="ingest-tab-btn" data-tab="history">追加增量聊天</button>
+                <button type="button" class="ingest-tab-btn" data-tab="knowledge">知识库提炼</button>
             </div>
 
             <div class="ingest-scroll-container">
-                <form id="onboard-form" class="ingest-form" onsubmit="return false;">
-                    <!-- 1. 微信备注名 -->
-                    <div class="form-group">
-                        <label for="input-target-name">1. 微信备注名 (必填):</label>
-                        <input type="text" id="input-target-name" class="text-input" placeholder="例如: 小张 (填微信里的备注名即可)" required>
-                        <div class="form-hint-text">提示: 抓取根据微信当前打开的聊天窗口自动核验</div>
-                    </div>
-
-                    <!-- 2. 自由描述纯填空 -->
-                    <div class="form-group">
-                        <label for="input-free-text">2. 关于 TA 与你想怎么聊 (自由描述，AI 自行分析):</label>
-                        <textarea id="input-free-text" class="text-area" rows="3" placeholder="写写关系背景或交互感觉，比如：
-大学室友兼同事，说话极致松弛互损，不用客套，多用短句... (可留空，后续边聊边学)"></textarea>
-                    </div>
-
-                    <!-- 3. 历史聊天记录文件夹拖拽 -->
-                    <div class="form-group">
-                        <label>3. 历史聊天记录文件夹 (可选):</label>
-                        <div id="folder-dropzone" class="dropzone">
-                            <div id="dropzone-text" class="dropzone-text">将聊天记录文件夹拖入此处 (或输入绝对路径)</div>
-                            <input type="text" id="input-folder-path" class="text-input drop-path-input" placeholder="文件夹绝对路径，如: /Users/.../chat_history">
+                <!-- Tab 1: 联系人建档与初始分析 -->
+                <div id="tab-pane-contact" class="tab-pane active">
+                    <form id="onboard-form" class="ingest-form" onsubmit="return false;">
+                        <div class="form-group">
+                            <div class="label-row">
+                                <label for="input-target-name">微信备注名 (必填):</label>
+                                <button type="button" id="btn-fill-current-target" class="text-link-btn">填入当前目标</button>
+                            </div>
+                            <input type="text" id="input-target-name" class="text-input" placeholder="例如: 小张" required>
                         </div>
-                    </div>
 
-                    <!-- 知识库位置指引提示 -->
-                    <div class="knowledge-tip-card">
-                        提示: 沟通策略知识库位于 knowledge/ 目录，可随时放入自定义 md 丰富战术策略
-                    </div>
-                </form>
-            </div>
+                        <!-- 关系定位快捷胶囊 -->
+                        <div class="form-group">
+                            <label>关系定位 (点击快速定调):</label>
+                            <div class="archetype-chips" id="archetype-chips">
+                                <span class="arch-chip" data-text="心动追求，渴望展现魅力与真诚，希望幽默且体贴">心动追求</span>
+                                <span class="arch-chip" data-text="暧昧升温，互动频繁，说话带点轻微拉扯与宠溺">暧昧升温</span>
+                                <span class="arch-chip" data-text="多年老友死党，说话极致松弛互损，不用客套，多用大白话">老友死党</span>
+                                <span class="arch-chip" data-text="职场同事/合作伙伴，沟通高效得体，平视尊重，不卑不亢">职场搭子</span>
+                            </div>
+                        </div>
 
-            <!-- 底部操作区 (紧跟表单下方，绝无留白) -->
-            <div class="form-actions">
-                <button type="button" id="btn-reset-form" class="btn-secondary">重置</button>
-                <button type="button" id="btn-submit-onboard" class="btn-primary">智能分析并建档</button>
+                        <div class="form-group">
+                            <label for="input-free-text">相处描述与偏好 (AI 提炼专属规则):</label>
+                            <textarea id="input-free-text" class="text-area" rows="2" placeholder="写写TA的性格、常驻城市或沟通习惯（如：喜欢探店，少提加班，说话用短句...）"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>历史聊天记录文件夹/文件 (可选，自动脱水分析):</label>
+                            <div id="folder-dropzone" class="dropzone">
+                                <div id="dropzone-text" class="dropzone-text">拖入聊天记录目录或单文件 (CSV/JSON/TXT)</div>
+                                <input type="text" id="input-folder-path" class="text-input drop-path-input" placeholder="绝对路径或直接拖入此处">
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" id="btn-reset-form" class="btn-secondary">重置</button>
+                            <button type="button" id="btn-submit-onboard" class="btn-primary">智能分析并建档</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Tab 2: 增量聊天追加分析 -->
+                <div id="tab-pane-history" class="tab-pane hidden">
+                    <form id="incremental-form" class="ingest-form" onsubmit="return false;">
+                        <div class="form-group">
+                            <label for="select-incremental-target">选择已有联系人:</label>
+                            <select id="select-incremental-target" class="target-select text-input" style="width: 100%;">
+                                <option value="">加载中...</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>新导出的聊天记录目录或文件:</label>
+                            <div id="history-dropzone" class="dropzone">
+                                <div id="history-dropzone-text" class="dropzone-text">拖入新的聊天记录目录或单文件 (CSV/JSON/TXT)</div>
+                                <input type="text" id="input-history-path" class="text-input drop-path-input" placeholder="绝对路径或拖入此处">
+                            </div>
+                            <div class="form-hint-text">自动基于消息指纹去重，仅提取并增量沉淀最新发生的事件</div>
+                        </div>
+
+                        <div id="incremental-feedback" class="feedback-card hidden"></div>
+
+                        <div class="form-actions">
+                            <button type="button" id="btn-submit-incremental" class="btn-primary">追加并增量分析</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Tab 3: 知识库微策略提炼 -->
+                <div id="tab-pane-knowledge" class="tab-pane hidden">
+                    <form id="knowledge-form" class="ingest-form" onsubmit="return false;">
+                        <div class="form-group">
+                            <label for="input-kb-title">策略标题 / 来源 (可选):</label>
+                            <input type="text" id="input-kb-title" class="text-input" placeholder="例如: 吵架快速和好指南、初见破冰法">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="input-kb-text">长文攻略内容 (直接粘贴或拖入 md/txt):</label>
+                            <textarea id="input-kb-text" class="text-area" rows="3" placeholder="粘贴任何恋爱技巧、人际沟通心得或心理学文章..."></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <div id="kb-dropzone" class="dropzone dropzone-mini">
+                                <div id="kb-dropzone-text" class="dropzone-text">或将 md/txt 文件拖入此处</div>
+                                <input type="text" id="input-kb-file-path" class="text-input drop-path-input" placeholder="文件绝对路径">
+                            </div>
+                        </div>
+
+                        <div id="kb-feedback" class="feedback-card hidden"></div>
+
+                        <div class="form-actions">
+                            <button type="button" id="btn-submit-knowledge" class="btn-primary">AI 提炼为微策略卡</button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </main>
 
