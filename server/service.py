@@ -50,6 +50,7 @@ class EchoLensService:
         self.current_context = ""
         self.cached_options: List[Dict[str, Any]] = []
         self.cached_insights: List[Dict[str, str]] = []
+        self.cached_risk_alert = ""
         self.webview_window = None
 
         # 同一时刻只允许一次抓取 (手动抓取与自动循环共用，避免同时截图与重复沉淀)
@@ -161,6 +162,7 @@ class EchoLensService:
                 "reply_status": self.current_reply_status,
                 "options": self.cached_options,
                 "insights": self.cached_insights,
+                "risk_alert": self.cached_risk_alert,
                 "generating": self.generating,
             }
         payload.update(extra)
@@ -194,6 +196,7 @@ class EchoLensService:
                 if seq == self._gen_seq:
                     self.cached_options = [opt.to_dict() for opt in result.options]
                     self.cached_insights = result.insights
+                    self.cached_risk_alert = result.risk_alert
         except Exception as e:
             logger.error("[Generation Error] %s", e)
         finally:
@@ -255,6 +258,7 @@ class EchoLensService:
                 "message_time": self.state_machine.last_incoming_time_str,
                 "options": self.cached_options,
                 "insights": self.cached_insights,
+                "risk_alert": self.cached_risk_alert,
                 "generating": self.generating,
                 "auto_loop_enabled": self.auto_loop_enabled,
                 "auto_loop_countdown": self.auto_loop_countdown

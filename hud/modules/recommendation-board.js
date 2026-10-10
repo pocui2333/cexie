@@ -43,14 +43,15 @@ class RecommendationBoard {
      * 更新或清除建议卡片
      * @param {Array} options - 回复建议数组 (通常 4 条)
      * @param {Array} insights - 本轮洞察 [{label, text}]
+     * @param {string} riskAlert - 避雷提醒 (固定置于洞察末行，防止说错话)
      */
-    update(options, insights) {
+    update(options, insights, riskAlert) {
         if (options && options.length > 0) {
             const sig = options.map(o => `${o.slot_id}:${o.reply_text}`).join('|') +
-                '|' + (insights || []).map(it => `${it.label}:${it.text}`).join('|');
+                '|' + (insights || []).map(it => `${it.label}:${it.text}`).join('|') + `|${riskAlert || ''}`;
             if (sig !== this.lastSignature) {
                 this.lastSignature = sig;
-                this.renderCards(options, insights);
+                this.renderCards(options, insights, riskAlert);
             }
         } else {
             if (this.lastSignature !== '__CLEARED__') {
@@ -60,19 +61,25 @@ class RecommendationBoard {
         }
     }
 
-    renderCards(options, insights) {
+    renderCards(options, insights, riskAlert) {
         if (!options || options.length === 0 || !this.dualTrackGrid) return;
 
-        // 1. 渲染本轮洞察 (标签与条数均不固定)
+        // 1. 渲染本轮洞察 (标签与条数均不固定) + 固定的避雷行
         if (this.insightSection) {
             const items = (insights || []).filter(it => it && it.label && it.text);
-            if (items.length > 0 && this.insightList) {
+            if ((items.length > 0 || riskAlert) && this.insightList) {
+                const riskHtml = riskAlert ? `
+                    <div class="insight-row insight-risk-row">
+                        <span class="insight-tag tag-risk">避雷</span>
+                        <span class="insight-content">${this.escapeHtml(riskAlert)}</span>
+                    </div>
+                ` : '';
                 this.insightList.innerHTML = items.map(it => `
                     <div class="insight-row">
                         <span class="insight-tag">${this.escapeHtml(it.label)}</span>
                         <span class="insight-content">${this.escapeHtml(it.text)}</span>
                     </div>
-                `).join('');
+                `).join('') + riskHtml;
                 this.insightSection.style.display = 'flex';
             } else {
                 this.insightSection.style.display = 'none';

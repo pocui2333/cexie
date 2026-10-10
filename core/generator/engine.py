@@ -40,7 +40,11 @@ def parse_generation_output(content: str) -> Optional[Dict[str, Any]]:
         label, text = str(it.get("label", "")).strip(), str(it.get("text", "")).strip()
         if label and text:
             insights.append({"label": label, "text": text})
-    return {"insights": insights[:MAX_INSIGHTS], "options": options[:OPTION_COUNT]}
+    return {
+        "insights": insights[:MAX_INSIGHTS],
+        "risk_alert": str(parsed.get("risk_alert") or "").strip(),
+        "options": options[:OPTION_COUNT],
+    }
 
 
 class DualTrackGenerator:
@@ -101,10 +105,11 @@ class DualTrackGenerator:
 
         if llm_res:
             insights = llm_res["insights"]
+            risk_alert = llm_res["risk_alert"]
             options_data = llm_res["options"]
         else:
             # 离线兜底不编造洞察，前端无洞察时自动隐藏该区域
-            insights = []
+            insights, risk_alert = [], ""
             options_data = synthesize_scenario_options(
                 target_name, text_clean, memory_episodes, rules,
                 context_text, ego_utterances, qa_snippets, calibrated_terms
@@ -124,7 +129,8 @@ class DualTrackGenerator:
             target_name=target_name,
             incoming_context=text_clean,
             options=options,
-            insights=insights
+            insights=insights,
+            risk_alert=risk_alert
         )
 
     def _filter_style_samples(

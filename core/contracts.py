@@ -61,6 +61,7 @@ class DualTrackResult:
     options: List[GenerationOption]
     # 本轮洞察 [{label, text}]，标签由模型按当轮情况现起 (如: {"label": "在晒手艺", "text": "想被夸，别挑刺"})
     insights: List[Dict[str, str]] = field(default_factory=list)
+    risk_alert: str = ""                    # 避雷：本轮我方绝不能说/做的事 (每轮必出，防止说错话)
     timestamp: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -68,6 +69,7 @@ class DualTrackResult:
             "target_name": self.target_name,
             "incoming_context": self.incoming_context,
             "insights": self.insights,
+            "risk_alert": self.risk_alert,
             "options": [opt.to_dict() for opt in self.options],
             "timestamp": self.timestamp.isoformat()
         }

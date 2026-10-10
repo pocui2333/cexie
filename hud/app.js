@@ -148,7 +148,7 @@ class EchoLensApp {
         // 4. 更新双轨建议卡片与僚机洞察
         try {
             if (this.recommendationBoard) {
-                this.recommendationBoard.update(data.options, data.insights);
+                this.recommendationBoard.update(data.options, data.insights, data.risk_alert);
             }
         } catch (e) {
             console.error('[App] RecommendationBoard update failed:', e);

@@ -134,9 +134,11 @@ class GenerationParseTest(unittest.TestCase):
     def test_dynamic_labels_and_trims_to_four(self):
         raw = json.dumps({
             "insights": [{"label": "在晒手艺", "text": "想被夸"}, {"label": "", "text": "缺标签丢弃"}, "垃圾"],
+            "risk_alert": " 别说她胖 ",
             "options": self.opts(5),
         }, ensure_ascii=False)
         res = parse_generation_output(raw)
+        self.assertEqual(res["risk_alert"], "别说她胖")
         self.assertEqual(res["insights"], [{"label": "在晒手艺", "text": "想被夸"}])
         self.assertEqual([o["label"] for o in res["options"]], ["打法0", "打法1", "打法2", "打法3"])
 
