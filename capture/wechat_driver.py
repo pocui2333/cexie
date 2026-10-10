@@ -3,7 +3,6 @@ WeChat Chat Driver: captures chat messages, performs turn segmentation,
 and validates active contact against safety guardrails.
 """
 import re
-import time
 from typing import Optional, Tuple, List
 from PIL import Image
 from capture.window import find_wechat_main_window_id, capture_window_screenshot
@@ -174,73 +173,14 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
         if not filtered_elements:
             return ChatCaptureResult(contact_name=detected_contact, reply_status="pending")
 
-        # 5.2 自动往上滑抓取上一屏 (Backlog Stitching 全景双屏自动缝合)
-        # 补全被折叠/顶出屏幕的历史消息，拍完即刻无感复位至最底部
-        backlog_turns = []
-        try:
-            from capture.window import scroll_wechat_chat_panel
-            if scroll_wechat_chat_panel(win_id, lines_delta=16):
-                time.sleep(0.18)
-                tmp_backlog_win = "/tmp/echolens_wc_backlog.png"
-                tmp_backlog_crop = "/tmp/echolens_wc_backlog_crop.png"
-                if capture_window_screenshot(win_id, tmp_backlog_win):
-                    # 立即将视口滑回最底部，确保用户操作界面 0 干扰复位
-                    scroll_wechat_chat_panel(win_id, lines_delta=-16)
-
-                    b_img = Image.open(tmp_backlog_win)
-                    b_cropped = b_img.crop(crop_box)
-                    b_cropped.save(tmp_backlog_crop)
-
-                    b_raw_obs = run_vision_ocr(tmp_backlog_crop)
-                    if b_raw_obs:
-                        b_obs_list = []
-                        for item in b_raw_obs:
-                            has_green = has_green_bubble_background(
-                                b_cropped, item["x"], item["y"], item["w"], item["h"]
-                            )
-                            b_obs_list.append({
-                                "y": item["y"],
-                                "x": item["x"],
-                                "w": item["w"],
-                                "r_x": item["r_x"],
-                                "txt": item["text"],
-                                "has_green": has_green
-                            })
-                        b_obs_list.sort(key=lambda it: -it["y"])
-                        b_elements = _filter_and_tag_bubbles(b_obs_list)
-
-                        # 探测上一屏中的图片气泡
-                        try:
-                            from capture.image_detector import detect_chat_image_bubbles
-                            b_imgs = detect_chat_image_bubbles(b_cropped, tmp_backlog_crop, known_text_boxes=b_raw_obs)
-                            for img_item in b_imgs:
-                                b_elements.append((
-                                    img_item["role"],
-                                    img_item["text"],
-                                    {"y": img_item["y"], "is_image": True}
-                                ))
-                            if b_imgs:
-                                b_elements.sort(key=lambda el: -el[2].get("y", 0.0))
-                        except Exception:
-                            pass
-
-                        backlog_turns = _group_turns(b_elements)
-            else:
-                scroll_wechat_chat_panel(win_id, lines_delta=-16)
-        except Exception as e:
-            print(f"[Backlog Stitching Warning] {e}")
-
-        # 6. 回合切分与气泡折行合并 (Turn Grouping with Backlog Stitching)
-        turns_current = _group_turns(filtered_elements)
-        if not turns_current:
+        # 6. 回合切分与气泡折行合并 (Turn Grouping with time hint tracking)
+        grouped_turns = _group_turns(filtered_elements)
+        if not grouped_turns:
             return ChatCaptureResult(contact_name=detected_contact, reply_status="pending")
 
-        # 将上一屏与当前屏无损缝合，形成全景消息流
-        grouped_turns = _stitch_backlog_and_current(backlog_turns, turns_current)
-
-        # 7. 构建最近 8~12 轮黄金滑动上下文流水 (包含上一屏与当前屏)
+        # 7. 构建最近 2~3 轮黄金滑动上下文流水
         dialogue_lines = []
-        for t in grouped_turns[-10:]:
+        for t in grouped_turns[-6:]:
             spk = "我" if t["role"] == "EGO" else (detected_contact or "对方")
             time_prefix = f"[{t.get('time_hint')}] " if t.get('time_hint') else ""
             quote_suffix = f" (引用我方: \"{t['quote']}\")" if t.get('quote') else ""
@@ -439,35 +379,4 @@ def _group_turns(elements: List[tuple]) -> List[Dict[str, Any]]:
         })
 
     return grouped
-
-def _stitch_backlog_and_current(backlog_turns: List[dict], current_turns: List[dict]) -> List[dict]:
-    """
-    全景双屏缝合算法 (Seamless Backlog Stitching):
-    - 将上一屏 (backlog_turns) 与当前最新屏 (current_turns) 按时间线无损缝合;
-    - 优先匹配重叠滑动窗口 (后缀与前缀完全一致的公共部分);
-    - 无严格连续重叠时，基于内容指纹去重后前置拼装，确保被折叠/顶上去的历史消息不遗漏。
-    """
-    if not backlog_turns:
-        return current_turns
-    if not current_turns:
-        return backlog_turns
-
-    # 1. 查找最大重叠窗口 (后缀与前缀匹配)
-    max_k = min(len(backlog_turns), len(current_turns))
-    overlap_len = 0
-    for k in range(max_k, 0, -1):
-        backlog_slice = [t["text"].strip() for t in backlog_turns[-k:]]
-        current_slice = [t["text"].strip() for t in current_turns[:k]]
-        if backlog_slice == current_slice:
-            overlap_len = k
-            break
-
-    if overlap_len > 0:
-        return backlog_turns[:-overlap_len] + current_turns
-    else:
-        # 2. 无连续重叠时，基于内容指纹去重后前置拼装
-        cur_texts = {t["text"].strip() for t in current_turns}
-        unique_backlog = [t for t in backlog_turns if t["text"].strip() not in cur_texts]
-        return unique_backlog + current_turns
-
 
