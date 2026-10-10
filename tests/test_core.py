@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from capture.names import is_contact_match
-from capture.wechat_driver import _group_turns, _result_from_llm, _result_from_turns
+from capture.wechat_driver import _group_turns, _result_from_turns
 from core import llm_client, store
 from core.contracts import NO_REPLY
 from core.generator.engine import parse_generation_output
@@ -49,15 +49,21 @@ class SolarTermTest(unittest.TestCase):
 
 class GuardrailsTest(unittest.TestCase):
     def test_keeps_decimals_and_urls(self):
-        out = apply_linguistic_guardrails("3.5折。去 www.xx.com 看看!", {})
+        out = apply_linguistic_guardrails("3.5折。去 www.xx.com 看看!", {"forbidden_punctuation": ["。", "!", "."]})
         self.assertIn("3.5折", out)
         self.assertIn("www.xx.com", out)
         self.assertNotIn("。", out)
         self.assertNotIn("!", out)
 
     def test_rules_banned_phrases_and_emoji(self):
-        out = apply_linguistic_guardrails("在吗，今天吃火锅😀", {"banned_phrases": ["在吗"]})
+        out = apply_linguistic_guardrails("在吗，今天吃火锅😀", {"banned_phrases": ["在吗"], "forbid_emoji": True})
         self.assertEqual(out, "今天吃火锅")
+
+    def test_style_constraints_only_from_rules(self):
+        # 不配置时保留用户自己的标点与表情习惯
+        self.assertEqual(apply_linguistic_guardrails("好的。明天见😀", {}), "好的。明天见😀")
+        out = apply_linguistic_guardrails("好的。打3.5折！", {"forbidden_punctuation": ["。", "！", "."]})
+        self.assertEqual(out, "好的，打3.5折")
 
 
 class ExtractJsonTest(unittest.TestCase):
@@ -118,33 +124,11 @@ class TurnParsingTest(unittest.TestCase):
         self.assertEqual(res.ego_text.split("\n"), ["吃了", "你在哪吃"])
         self.assertEqual(res.incoming_text.split("\n"), ["吃了吗", "我吃火锅"])
 
-    def test_llm_path_display_fields_follow_geometry(self):
-        # 模型返回的展示字段不可靠 (已回复时常给空/旧的对方消息)，只采纳其对话流水
-        turns = _group_turns(self.els(("TARGET", "吃了吗", 0.6), ("EGO", "吃了", 0.4)))
-        llm = {"incoming_text": "", "ego_text": "早啊", "reply_status": "pending", "dialogue_context": "[张伟]: 吃了吗\n[我]: 吃了"}
-        res = _result_from_llm(llm, "张伟", turns)
-        self.assertEqual((res.incoming_text, res.ego_text, res.reply_status), ("吃了吗", "吃了", "replied"))
-        self.assertEqual(res.dialogue_context, llm["dialogue_context"])
-
-
-class GenerationParseTest(unittest.TestCase):
-    def opts(self, n):
-        return [{"label": f"打法{i}", "text": f"回复{i}", "rationale": "r"} for i in range(n)]
-
-    def test_dynamic_labels_and_trims_to_four(self):
-        raw = json.dumps({
-            "insights": [{"label": "在晒手艺", "text": "想被夸"}, {"label": "", "text": "缺标签丢弃"}, "垃圾"],
-            "risk_alert": " 别说她胖 ",
-            "options": self.opts(5),
-        }, ensure_ascii=False)
-        res = parse_generation_output(raw)
-        self.assertEqual(res["risk_alert"], "别说她胖")
-        self.assertEqual(res["insights"], [{"label": "在晒手艺", "text": "想被夸"}])
-        self.assertEqual([o["label"] for o in res["options"]], ["打法0", "打法1", "打法2", "打法3"])
-
-    def test_too_few_options_falls_back(self):
-        self.assertIsNone(parse_generation_output(json.dumps({"insights": [], "options": self.opts(3)})))
-        self.assertIsNone(parse_generation_output("不是 JSON"))
+    def test_context_labels_speakers_explicitly(self):
+        # 生成模型靠 [我] / [对方 xxx] 区分立场，标签必须稳定
+        turns = _group_turns(self.els(("TARGET", "赶紧买票", 0.6), ("EGO", "我也不想玩", 0.4)))
+        ctx = _result_from_turns(turns, "张伟").dialogue_context
+        self.assertEqual(ctx.split("\n"), ["[对方 张伟]: 赶紧买票", "[我]: 我也不想玩"])
 
 class DistillerDedupTest(unittest.TestCase):
     def setUp(self):

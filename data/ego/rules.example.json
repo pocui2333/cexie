@@ -1,0 +1,13 @@
+{
+  "target_name": "EGO_GLOBAL",
+  "sentence_length": {
+    "min": 6,
+    "max": 30,
+    "ideal": 15
+  },
+  "forbidden_punctuation": [],
+  "forbid_emoji": false,
+  "allowed_emojis": [],
+  "banned_phrases": [],
+  "tone_keywords": []
+}

@@ -10,7 +10,6 @@ import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 import config
-from core import llm_client
 from core.contracts import ChatCaptureResult, NO_REPLY
 from capture.names import is_contact_match
 from capture.window import find_wechat_main_window_id, capture_window_screenshot
@@ -175,53 +174,22 @@ def _parse_window_screenshot(shot_path: str, work_dir: str, expected_target: Opt
     if not elements:
         return ChatCaptureResult(contact_name=detected_contact, reply_status="pending")
 
+    # 4. 按气泡几何切分轮次 (说话人由绿底/白底像素判定，比模型转述可靠，且不额外等待模型调用)
     grouped_turns = _group_turns(elements)
-
-    # 4. 【优先通道】大模型语义归并 (复用本地 OCR 与气泡归属结果)
-    if llm_client.is_enabled():
-        from capture.llm_parser import parse_chat_elements_via_llm
-        llm_data = parse_chat_elements_via_llm(elements, contact_name=detected_contact)
-        if llm_data:
-            return _result_from_llm(llm_data, detected_contact, grouped_turns)
-
-    # 5. 本地规则兜底
     if not grouped_turns:
         return ChatCaptureResult(contact_name=detected_contact, reply_status="pending")
     return _result_from_turns(grouped_turns, detected_contact)
 
 
 def _build_dialogue_context(grouped_turns: List[Dict[str, Any]], contact: Optional[str]) -> str:
-    """构建最近 2~3 轮滑动上下文流水"""
+    """构建最近几轮滑动上下文流水；说话人标签固定为 [我] / [对方 xxx]，供生成模型区分立场"""
     lines = []
-    for t in grouped_turns[-6:]:
-        spk = "我" if t["role"] == "EGO" else (contact or "对方")
+    for t in grouped_turns[-8:]:
+        spk = "我" if t["role"] == "EGO" else (f"对方 {contact}" if contact else "对方")
         time_prefix = f"[{t.get('time_hint')}] " if t.get("time_hint") else ""
         quote_suffix = f" (引用我方: \"{t['quote']}\")" if t.get("quote") else ""
         lines.append(f"{time_prefix}[{spk}]{quote_suffix}: {t['text']}")
     return "\n".join(lines)
-
-
-def _result_from_llm(llm_data: Dict[str, Any], contact: Optional[str], grouped_turns: List[Dict[str, Any]]) -> ChatCaptureResult:
-    """
-    模型只负责语义整理后的对话流水 (供建议生成)；HUD 展示的对方消息 / 我方回复 / 回复状态
-    一律取自本地气泡几何切分，避免模型漏句、串入旧消息或在"已回复"时返回空的对方消息。
-    """
-    if not grouped_turns:
-        replied = "replied" in (llm_data.get("reply_status") or "")
-        ego_text = llm_data.get("ego_text") or NO_REPLY
-        return ChatCaptureResult(
-            contact_name=contact,
-            incoming_text=llm_data.get("incoming_text") or "",
-            ego_text=ego_text,
-            reply_status="replied" if replied else "pending",
-            dialogue_context=llm_data.get("dialogue_context") or "",
-            case_type=1 if replied else 2,
-            last_ego_text=ego_text if ego_text != NO_REPLY else ""
-        )
-    result = _result_from_turns(grouped_turns, contact)
-    if llm_data.get("dialogue_context"):
-        result.dialogue_context = llm_data["dialogue_context"]
-    return result
 
 
 def _result_from_turns(grouped_turns: List[Dict[str, Any]], contact: Optional[str]) -> ChatCaptureResult:

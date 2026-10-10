@@ -233,7 +233,7 @@ class DualTrackGenerator:
         return ""
 
     def _load_rules(self, target_name: str) -> Dict[str, Any]:
-        rules = {"taboo_words": [], "style_preference": "接地气、逗号断句、无标点叹号"}
+        rules = {"taboo_words": []}
         ego_rules_path = os.path.join(self.ego_dir, "rules.json")
         if os.path.exists(ego_rules_path):
             try:

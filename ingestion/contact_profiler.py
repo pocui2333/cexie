@@ -92,12 +92,8 @@ class ContactProfiler:
                 "max": ideal_len + 10,
                 "ideal": ideal_len
             },
-            "cadence": "comma_separated_flow",
-            "forbidden_punctuation": ["。", "！", "!", "."],
-            "forbidden_emojis": ["[破涕为笑]", "[捂脸]"],
-            "allowed_emojis": ["[偷笑]"],
-            "banned_phrases": banned_phrases,
-            "tone_keywords": ["松弛互损", "大白话", "克制接地气"]
+            # 标点 / 表情 / 语气等说话习惯默认继承全局 data/ego/rules.json，这里不预设
+            "banned_phrases": banned_phrases
         }
 
     def _synthesize_dossier(self, target_name: str, description: str) -> str:
@@ -111,7 +107,7 @@ class ContactProfiler:
 ---
 
 ## 一、 人物本质底色与沟通基调
-根据用户填空描述自动初始化，保持松弛本真互动，坚持无感逗号流。
+根据用户填空描述自动初始化，后续聊天中逐步补充。
 
 ## 二、 核心生活圈与关键关联实体
 暂无关联实体，系统将在后续聊天脱水归档时自动捕获并建立索引。

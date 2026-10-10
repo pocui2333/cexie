@@ -46,9 +46,10 @@ python3 app.py
 
 ```bash
 cp data/ego/profile.example.md data/ego/profile.md   # 然后按自己的真实情况填写
+cp data/ego/rules.example.json data/ego/rules.json   # 可选：标点、表情、句长、禁用词
 ```
 
-全局禁用词、句长与语气基调在 `data/ego/rules.json` 中配置；每个好友目录下的 `rules.json` 可以覆盖全局设置（禁用词取并集）。
+全局禁用词、句长、语气基调，以及是否禁用某些标点（`forbidden_punctuation`）或 emoji（`forbid_emoji`）都在 `data/ego/rules.json` 中配置，代码不预设任何说话习惯；每个好友目录下的 `rules.json` 可以覆盖全局设置（禁用词取并集）。
 
 ---
 

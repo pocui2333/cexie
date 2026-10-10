@@ -28,3 +28,7 @@ Icon
 data/contacts/*
 !data/contacts/示例好友/
 !data/contacts/.gitkeep
+
+# 个人人设与说话习惯 (仓库只保留 *.example 模板)
+data/ego/profile.md
+data/ego/rules.json
