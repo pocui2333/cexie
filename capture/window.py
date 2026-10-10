@@ -78,3 +78,40 @@ def capture_window_screenshot(win_id: int, output_path: str = "/tmp/echolens_wc_
     except Exception as e:
         print(f"[Screenshot Error] {e}")
         return False
+
+def scroll_wechat_chat_panel(win_id: int, lines_delta: int) -> bool:
+    """
+    通过 CoreGraphics 向微信主聊天窗口消息气泡区域发送平滑滚轮事件:
+    - lines_delta > 0: 向上滚动 (回溯上一屏/顶上去的历史消息)
+    - lines_delta < 0: 向下滚动 (秒级还原视口至最底部)
+    """
+    try:
+        import Quartz
+        windows = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListExcludeDesktopElements, Quartz.kCGNullWindowID)
+        win_info = next((w for w in windows if w.get(Quartz.kCGWindowNumber) == win_id), None)
+        if not win_info:
+            return False
+
+        b = win_info.get(Quartz.kCGWindowBounds, {})
+        wx = b.get("X", 0)
+        wy = b.get("Y", 0)
+        ww = b.get("Width", 0)
+        wh = b.get("Height", 0)
+
+        # 微信右侧主聊天消息气泡区域的几何中心
+        cx = wx + ww * 0.65
+        cy = wy + wh * 0.45
+
+        orig_pos = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+        Quartz.CGWarpMouseCursorPosition(Quartz.CGPoint(cx, cy))
+
+        evt = Quartz.CGEventCreateScrollWheelEvent(None, Quartz.kCGScrollEventUnitLine, 1, lines_delta)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, evt)
+
+        time.sleep(0.04)
+        Quartz.CGWarpMouseCursorPosition(orig_pos)
+        return True
+    except Exception as e:
+        print(f"[Scroll Error] {e}")
+        return False
+
