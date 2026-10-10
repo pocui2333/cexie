@@ -143,10 +143,13 @@ def build_user_prompt(
 
     knowledge_section = ""
     if knowledge_guidance:
+        taboo_line = f"- 避坑雷区: {knowledge_guidance.get('taboo')}\n" if knowledge_guidance.get("taboo") else ""
+        tactics_line = f"- 实操支点: {knowledge_guidance.get('tactics')}\n" if knowledge_guidance.get("tactics") else ""
         knowledge_section = (
-            f"【通用高情商社交策略库参考 (选自知识库《{knowledge_guidance.get('source_doc', '')}》)】:\n"
+            f"【通用高情商情景微策略卡参考 (选自知识库《{knowledge_guidance.get('source_doc', '')}》)】:\n"
             f"- 战术定调: 【{knowledge_guidance.get('title', '')}】\n"
-            f"- 核心心法: {knowledge_guidance.get('principle', '')}\n\n"
+            f"- 核心心法: {knowledge_guidance.get('principle', '')}\n"
+            f"{taboo_line}{tactics_line}\n"
         )
 
     terms_section = ""
