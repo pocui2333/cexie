@@ -52,10 +52,12 @@ class ContextViewer {
         }
 
         // 3. 对方消息更新 (独立容错 + 脏检查)
-        if (data.incoming_text && data.incoming_text !== this.lastIncomingText) {
-            this.lastIncomingText = data.incoming_text;
+        // 空值也要渲染 (例如对方消息已滚出屏幕)，否则会一直停留在上一轮的旧消息
+        const incomingText = data.incoming_text || '（屏幕上暂无对方新消息）';
+        if (incomingText !== this.lastIncomingText) {
+            this.lastIncomingText = incomingText;
             if (this.incomingMessageBox) {
-                this.incomingMessageBox.textContent = data.incoming_text;
+                this.incomingMessageBox.textContent = incomingText;
             }
             if (this.windowManager && typeof this.windowManager.fitWindowToContent === 'function') {
                 this.windowManager.fitWindowToContent();

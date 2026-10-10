@@ -1,6 +1,6 @@
 """
 DualTrackGenerator: Coordinates LLM generation and Heuristic Rule synthesis,
-ensuring strict 2x3 matrix compliance and linguistic guardrails.
+producing 4 situational reply options plus free-form insights, with linguistic guardrails.
 """
 import logging
 import os
@@ -21,9 +21,31 @@ logger = logging.getLogger(__name__)
 
 _SENTIMENT_CACHE: Dict[str, bool] = {}
 
+OPTION_COUNT = 4
+MAX_INSIGHTS = 4
+
+
+def parse_generation_output(content: str) -> Optional[Dict[str, Any]]:
+    """解析模型输出 {insights, options}；回复条数不足时返回 None 走离线兜底"""
+    parsed = llm_client.extract_json(content, want="object")
+    if not isinstance(parsed, dict):
+        return None
+    options = [o for o in parsed.get("options") or [] if isinstance(o, dict) and str(o.get("text", "")).strip()]
+    if len(options) < OPTION_COUNT:
+        return None
+    insights = []
+    for it in parsed.get("insights") or []:
+        if not isinstance(it, dict):
+            continue
+        label, text = str(it.get("label", "")).strip(), str(it.get("text", "")).strip()
+        if label and text:
+            insights.append({"label": label, "text": text})
+    return {"insights": insights[:MAX_INSIGHTS], "options": options[:OPTION_COUNT]}
+
+
 class DualTrackGenerator:
     """
-    双轨 6 选项生成引擎 (The 2x3 Matrix Engine)
+    4 条回复建议 + 本轮洞察生成引擎 (标签均由模型按当轮对话现起，不设固定槽位)
     """
     def __init__(self, ego_dir: str, contacts_dir: str, knowledge_dir: str):
         self.ego_dir = ego_dir
@@ -78,14 +100,11 @@ class DualTrackGenerator:
                 logger.error("[LLM Generate Error] %s", e)
 
         if llm_res:
-            subtext = llm_res.get("subtext", "").strip()
-            risk_alert = llm_res.get("risk_alert", "").strip()
-            keywords = llm_res.get("keywords", [])
+            insights = llm_res["insights"]
             options_data = llm_res["options"]
         else:
-            subtext = "日常松弛交流 · 享受随性互动"
-            risk_alert = "顺着当下的情绪聊，避免客观挑刺或扫兴"
-            keywords = ["顺着聊", "生活日常", "同频互动"]
+            # 离线兜底不编造洞察，前端无洞察时自动隐藏该区域
+            insights = []
             options_data = synthesize_scenario_options(
                 target_name, text_clean, memory_episodes, rules,
                 context_text, ego_utterances, qa_snippets, calibrated_terms
@@ -96,8 +115,7 @@ class DualTrackGenerator:
             filtered_text = apply_linguistic_guardrails(str(item.get("text", "")), rules)
             options.append(GenerationOption(
                 slot_id=idx,
-                track="native" if idx <= 3 else "evolved",
-                sub_goal=item.get("sub_goal", "原生原话"),
+                sub_goal=str(item.get("label") or item.get("sub_goal") or "").strip(),
                 reply_text=filtered_text,
                 tactical_rationale=item.get("rationale", "")
             ))
@@ -106,9 +124,7 @@ class DualTrackGenerator:
             target_name=target_name,
             incoming_context=text_clean,
             options=options,
-            subtext=subtext,
-            risk_alert=risk_alert,
-            keywords=keywords
+            insights=insights
         )
 
     def _filter_style_samples(
@@ -188,22 +204,7 @@ class DualTrackGenerator:
             temperature=0.7, max_tokens=800, timeout=12.0
         )
 
-        # 1. 标准对象格式 {subtext, risk_alert, keywords, options}
-        parsed = llm_client.extract_json(content, want="object")
-        if isinstance(parsed, dict) and isinstance(parsed.get("options"), list) and len(parsed["options"]) == 6:
-            return {
-                "subtext": str(parsed.get("subtext", "")).strip(),
-                "risk_alert": str(parsed.get("risk_alert", "")).strip(),
-                "keywords": parsed.get("keywords", []) if isinstance(parsed.get("keywords"), list) else [],
-                "options": parsed["options"]
-            }
-
-        # 2. 兜底匹配纯数组格式
-        parsed_arr = llm_client.extract_json(content, want="array")
-        if isinstance(parsed_arr, list) and len(parsed_arr) == 6:
-            return {"subtext": "", "risk_alert": "", "keywords": [], "options": parsed_arr}
-
-        return None
+        return parse_generation_output(content)
 
     def _load_ego_profile(self) -> str:
         path = os.path.join(self.ego_dir, "profile.md")

@@ -78,24 +78,6 @@ class EntityMemoryRetriever:
             logger.error("[Today Memory Error] %s", e)
             return []
 
-    def get_today_fact_lines(self, target_name: str) -> List[str]:
-        """今日全部事实条目 (facts_summary 按 ; 与换行拆分)，供今日互动统计使用"""
-        today_prefix = datetime.now().strftime("%Y-%m-%d")
-        try:
-            with store.connect(target_name, self.contacts_dir) as conn:
-                if conn is None:
-                    return []
-                rows = conn.execute(
-                    "SELECT facts_summary FROM episode_records WHERE episode_date LIKE ?", (f"{today_prefix}%",)
-                ).fetchall()
-        except Exception as e:
-            logger.error("[Today Facts Error] %s", e)
-            return []
-        lines = []
-        for (summary,) in rows:
-            lines.extend(p.strip() for p in re.split(r"[;\n]", summary) if p.strip())
-        return lines
-
     def get_recent_ego_utterances(self, target_name: str, limit: int = 8) -> List[str]:
         """动态提取我方对该好友在历史事实记录中的真实发言原句 (Few-Shot 真实说话风格基准)"""
         results: List[str] = []

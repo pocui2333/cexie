@@ -41,16 +41,14 @@ class FactEpisode:
 
 @dataclass
 class GenerationOption:
-    slot_id: int                    # 1 ~ 6
-    track: str                      # "native" (1~3) | "evolved" (4~6)
-    sub_goal: str                   # 如: "直球承接", "事实接话", "肯定+情绪回音"
+    slot_id: int                    # 1 ~ 4
+    sub_goal: str                   # 本条打法标签，由模型按当轮对话现起 (如: "夸她手艺", "接火锅梗")
     reply_text: str
     tactical_rationale: str
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "slot_id": self.slot_id,
-            "track": self.track,
             "sub_goal": self.sub_goal,
             "reply_text": self.reply_text,
             "tactical_rationale": self.tactical_rationale
@@ -61,18 +59,15 @@ class DualTrackResult:
     target_name: str
     incoming_context: str
     options: List[GenerationOption]
-    subtext: str = ""                       # 对方核心潜台词洞察 (如: "对方在分享小确幸，渴望认同与夸奖")
-    risk_alert: str = ""                    # 沟通雷区与避坑预警 (如: "切忌算账挑刺或泼冷水，顺着开心的感觉接")
-    keywords: List[str] = field(default_factory=list) # 破局灵感关键词胶囊 (如: ["肯定会吃", "约老地方"])
+    # 本轮洞察 [{label, text}]，标签由模型按当轮情况现起 (如: {"label": "在晒手艺", "text": "想被夸，别挑刺"})
+    insights: List[Dict[str, str]] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "target_name": self.target_name,
             "incoming_context": self.incoming_context,
-            "subtext": self.subtext,
-            "risk_alert": self.risk_alert,
-            "keywords": self.keywords,
+            "insights": self.insights,
             "options": [opt.to_dict() for opt in self.options],
             "timestamp": self.timestamp.isoformat()
         }

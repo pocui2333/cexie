@@ -2,7 +2,7 @@
  * 侧写 (Cexie) - HUD 交互总线与协同中枢 (App Orchestrator)
  * 
  * 核心架构准则：
- * 1. 严格模块化解耦：上下文展示、建议卡片、互动统计、抓取控制、数据摄取与窗口管理均独立为单一职责模块；
+ * 1. 严格模块化解耦：上下文展示、建议卡片、抓取控制、数据摄取与窗口管理均独立为单一职责模块；
  * 2. 故障完全隔离：各模块在总线分发中通过 try-catch 严格沙箱隔离，任何单一模块的异常绝不波及其他模块；
  * 3. 响应式单向数据流：通过定时轮询及抓取回调获取单源数据，切片分发至各模块；
  * 4. 极致平滑：支持按窗口焦点自适应调节轮询频率，结合各模块自身的脏检查机制杜绝 UI 闪烁。
@@ -43,13 +43,10 @@ class EchoLensApp {
         // 2. 对话上下文展示模块 (对方消息、我方最新回复、状态指示)
         this.contextViewer = new ContextViewer(this.windowManager);
 
-        // 3. 双轨建议卡片与破局脚手架模块
+        // 3. 双轨建议卡片与僚机洞察模块
         this.recommendationBoard = new RecommendationBoard(this.windowManager);
 
-        // 4. 今日互动与动态统计看板模块
-        this.statsBoard = new StatsBoard(this.windowManager);
-
-        // 5. 抓取与循环控制模块
+        // 4. 抓取与循环控制模块
         this.captureController = new CaptureController({
             getTarget: () => this.windowManager ? this.windowManager.activeTarget : '',
             onCaptureSuccess: (data) => this.dispatchData(data),
@@ -60,7 +57,7 @@ class EchoLensApp {
             }
         });
 
-        // 6. 数据摄取与建档中心模块
+        // 5. 数据摄取与建档中心模块
         this.ingestionHub = new IngestionHub({
             windowManager: this.windowManager,
             getCurrentTarget: () => this.windowManager ? this.windowManager.activeTarget : '',
@@ -148,22 +145,13 @@ class EchoLensApp {
             console.error('[App] ContextViewer update failed:', e);
         }
 
-        // 4. 更新双轨建议卡片与破局脚手架
+        // 4. 更新双轨建议卡片与僚机洞察
         try {
             if (this.recommendationBoard) {
-                this.recommendationBoard.update(data.options, data.insight);
+                this.recommendationBoard.update(data.options, data.insights);
             }
         } catch (e) {
             console.error('[App] RecommendationBoard update failed:', e);
-        }
-
-        // 5. 更新今日互动统计面板 (无 6 档建议卡片时展示)
-        try {
-            if (this.statsBoard) {
-                this.statsBoard.update(data.stats, data.options);
-            }
-        } catch (e) {
-            console.error('[App] StatsBoard update failed:', e);
         }
     }
 }

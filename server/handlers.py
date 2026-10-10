@@ -152,16 +152,16 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
         elif parsed.path == "/api/inject_options":
             options = payload.get("options", [])
             valid = (
-                isinstance(options, list) and len(options) == 6 and
+                isinstance(options, list) and 1 <= len(options) <= 6 and
                 all(isinstance(o, dict) and isinstance(o.get("reply_text"), str) for o in options)
             )
             if valid:
                 service_instance.inject_options(options)
-                self._send_json({"status": "success", "message": "已成功注入外部大模型生成的 6 档建议卡片"})
+                self._send_json({"status": "success", "message": "已成功注入外部大模型生成的建议卡片"})
             else:
                 self._send_json({
                     "error": "invalid_format",
-                    "message": "需提供包含 6 个卡片对象的 options 数组 (每个对象包含 slot_id, sub_goal, reply_text)"
+                    "message": "需提供包含 1~6 个卡片对象的 options 数组 (建议 4 个，每个对象包含 slot_id, sub_goal, reply_text)"
                 }, 400)
 
         elif parsed.path == "/api/create_contact":

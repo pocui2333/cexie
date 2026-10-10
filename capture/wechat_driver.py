@@ -202,22 +202,26 @@ def _build_dialogue_context(grouped_turns: List[Dict[str, Any]], contact: Option
 
 
 def _result_from_llm(llm_data: Dict[str, Any], contact: Optional[str], grouped_turns: List[Dict[str, Any]]) -> ChatCaptureResult:
-    replied = "replied" in (llm_data.get("reply_status") or "")
-    incoming_text = llm_data.get("incoming_text") or ""
-    ego_text = llm_data.get("ego_text") or NO_REPLY
-    dialogue_context = llm_data.get("dialogue_context") or _build_dialogue_context(grouped_turns, contact)
-    return ChatCaptureResult(
-        contact_name=contact,
-        incoming_text=incoming_text,
-        ego_text=ego_text,
-        reply_status="replied" if replied else "pending",
-        dialogue_context=dialogue_context,
-        case_type=1 if replied else 2,
-        # 记忆沉淀使用本地逐气泡切分的轮次 (比模型汇总文本更细、更稳定，便于去重)
-        raw_turns=grouped_turns,
-        time_hint=grouped_turns[-1].get("time_hint") if grouped_turns else None,
-        last_ego_text=ego_text if ego_text != NO_REPLY else ""
-    )
+    """
+    模型只负责语义整理后的对话流水 (供建议生成)；HUD 展示的对方消息 / 我方回复 / 回复状态
+    一律取自本地气泡几何切分，避免模型漏句、串入旧消息或在"已回复"时返回空的对方消息。
+    """
+    if not grouped_turns:
+        replied = "replied" in (llm_data.get("reply_status") or "")
+        ego_text = llm_data.get("ego_text") or NO_REPLY
+        return ChatCaptureResult(
+            contact_name=contact,
+            incoming_text=llm_data.get("incoming_text") or "",
+            ego_text=ego_text,
+            reply_status="replied" if replied else "pending",
+            dialogue_context=llm_data.get("dialogue_context") or "",
+            case_type=1 if replied else 2,
+            last_ego_text=ego_text if ego_text != NO_REPLY else ""
+        )
+    result = _result_from_turns(grouped_turns, contact)
+    if llm_data.get("dialogue_context"):
+        result.dialogue_context = llm_data["dialogue_context"]
+    return result
 
 
 def _result_from_turns(grouped_turns: List[Dict[str, Any]], contact: Optional[str]) -> ChatCaptureResult:

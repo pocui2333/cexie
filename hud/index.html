@@ -75,103 +75,12 @@
                 </div>
             </section>
 
-            <!-- 统计看板面板 (无新建议/已回复时展示，今日互动分析 2x2 网格，无表情包) -->
-            <section id="stats-section" class="stats-section" style="display: none;">
-                <div class="stats-header">
-                    <span class="stats-title">今日互动与动态分析</span>
-                    <span id="stats-status-tag" class="stats-status-tag">候场中</span>
-                </div>
-                <div class="stats-grid">
-                    <!-- 卡片 1: 今日消息与比例 (相互发了多少条) -->
-                    <div class="stat-card">
-                        <div class="stat-meta">
-                            <span class="stat-label">今日消息</span>
-                            <span id="stat-balance-tip" class="stat-badge">双向互动</span>
-                        </div>
-                        <div class="stat-main">
-                            <div class="stat-ratio-text">
-                                <span class="stat-ratio-ego" id="stat-ego-ratio">我 0条</span>
-                                <span class="stat-ratio-divider">/</span>
-                                <span class="stat-ratio-target" id="stat-target-ratio">TA 0条</span>
-                            </div>
-                            <div class="stat-progress-bar">
-                                <div id="stat-progress-fill" class="progress-fill" style="width: 50%;"></div>
-                            </div>
-                        </div>
-                        <div id="stat-balance-desc" class="stat-sub">今日累计互动 · 话轮均衡</div>
-                    </div>
-
-                    <!-- 卡片 2: 互动热度 / 兴趣窗口 -->
-                    <div class="stat-card">
-                        <div class="stat-meta">
-                            <span class="stat-label">互动热度</span>
-                            <span id="stat-warmth-badge" class="stat-badge">高兴趣</span>
-                        </div>
-                        <div class="stat-main">
-                            <div class="stat-value-highlight">
-                                <span class="stat-num" id="stat-warmth-score">80</span>
-                                <span class="stat-unit">分</span>
-                                <span class="stat-ratio-divider" style="margin: 0 4px;">·</span>
-                                <span id="stat-warmth-window" class="stat-text-highlight">高兴趣窗口</span>
-                            </div>
-                            <div class="stat-progress-bar">
-                                <div id="stat-warmth-fill" class="progress-fill heat-fill" style="width: 80%;"></div>
-                            </div>
-                        </div>
-                        <div class="stat-sub" id="stat-warmth-tactic">情绪高位 · 适合顺势拉扯或邀约</div>
-                    </div>
-
-                    <!-- 卡片 3: 今日动态微观分析 -->
-                    <div class="stat-card">
-                        <div class="stat-meta">
-                            <span class="stat-label">今日动态</span>
-                            <span id="stat-dynamic-badge" class="stat-badge-subtle">主动分享生活</span>
-                        </div>
-                        <div class="stat-main">
-                            <div class="stat-value-highlight">
-                                <span id="stat-dynamic-title" class="stat-text-highlight">日常松弛互动</span>
-                            </div>
-                        </div>
-                        <div id="stat-dynamic-desc" class="stat-sub">老友日常碎语交流 · 氛围松弛无压力</div>
-                    </div>
-
-                    <!-- 卡片 4: 今日话题焦点 -->
-                    <div class="stat-card">
-                        <div class="stat-meta">
-                            <span class="stat-label">今日话题</span>
-                            <span class="stat-badge-subtle">今日热词</span>
-                        </div>
-                        <div class="stat-main">
-                            <div id="stat-tags-container" class="stat-tags-list">
-                                <span class="stat-tag">日常</span>
-                                <span class="stat-tag">交流</span>
-                                <span class="stat-tag">唠嗑</span>
-                            </div>
-                        </div>
-                        <div class="stat-sub">今日核心讨论焦点</div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- 僚机洞察与灵感破局脚手架 (待回复时与卡片同步展示) -->
+            <!-- 本轮洞察 (标签由模型按当轮对话现起，条数不固定) -->
             <section id="insight-scaffolding-section" class="insight-section" style="display: none;">
-                <div class="insight-banner">
-                    <div class="insight-row insight-subtext-row">
-                        <span class="insight-tag tag-subtext">潜台词</span>
-                        <span id="insight-subtext-text" class="insight-content">分析中...</span>
-                    </div>
-                    <div id="insight-risk-row" class="insight-row insight-risk-row">
-                        <span class="insight-tag tag-risk">避坑预警</span>
-                        <span id="insight-risk-text" class="insight-content">顺着聊，避免扫兴</span>
-                    </div>
-                </div>
-                <div id="insight-chips-bar" class="insight-chips-bar">
-                    <span class="chips-label">破局灵感:</span>
-                    <div id="insight-chips-container" class="chips-container"></div>
-                </div>
+                <div id="insight-list" class="insight-banner"></div>
             </section>
 
-            <!-- 双轨 2x3 选项输出网格 (待回复时动态展开) -->
+            <!-- 4 条回复建议 2x2 网格 (生成完成后动态展开) -->
             <section class="dual-track-section" style="display: none;">
                 <div id="dual-track-grid" class="dual-track-grid"></div>
             </section>
@@ -297,7 +206,6 @@
     <script src="modules/window-manager.js"></script>
     <script src="modules/context-viewer.js"></script>
     <script src="modules/recommendation-board.js"></script>
-    <script src="modules/stats-board.js"></script>
     <script src="modules/capture-controller.js"></script>
     <script src="modules/ingestion-hub.js"></script>
     <script src="app.js"></script>

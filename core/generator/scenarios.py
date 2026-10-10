@@ -18,22 +18,17 @@ def synthesize_scenario_options(
     # 优先复用历史类似提问下我方的真实回答（若有）
     u1 = "挺好的，怎么顺心怎么整，自己开心最重要"
     u2 = "我平时也差不多这样，按自己喜欢的节奏来最舒服"
-    u3 = "先把眼前事忙明白，回头好好犒劳一下自己"
 
     if qa_snippets:
         if len(qa_snippets) >= 1 and qa_snippets[0].get("ego_replied"):
             u1 = qa_snippets[0]["ego_replied"]
         if len(qa_snippets) >= 2 and qa_snippets[1].get("ego_replied"):
             u2 = qa_snippets[1]["ego_replied"]
-        if len(qa_snippets) >= 3 and qa_snippets[2].get("ego_replied"):
-            u3 = qa_snippets[2]["ego_replied"]
     elif ego_utterances:
         if len(ego_utterances) >= 1:
             u1 = ego_utterances[0]
         if len(ego_utterances) >= 2:
             u2 = ego_utterances[1]
-        if len(ego_utterances) >= 3:
-            u3 = ego_utterances[2]
 
     # 根据领域语义微调接梗与推进话术，避免风马牛不相及
     is_food = False
@@ -57,10 +52,8 @@ def synthesize_scenario_options(
         slot6_text = "下回也带我去一回，我负责买单你负责带路"
 
     return [
-        {"sub_goal": "原生原话", "text": u1, "rationale": "顺着对方当下的快乐点肯定，接住分享欲"},
-        {"sub_goal": "原生原话", "text": u2, "rationale": "接地气生活大白话同频畅聊"},
-        {"sub_goal": "原生原话", "text": u3, "rationale": "顺着话题好奇延展一个小点激发后续互动"},
-        {"sub_goal": "幽默接梗", "text": slot4_text, "rationale": "在原话基础上融入生动画面感逗乐对方"},
-        {"sub_goal": "情绪撑腰", "text": "开心最要紧，怎么舒服怎么来，不用在意外面怎么说", "rationale": "无条件偏袒夸奖，消除顾虑"},
-        {"sub_goal": "互动推进", "text": slot6_text, "rationale": "在原话基础上自然提出共同体验与陪伴"}
+        {"label": "我的原话", "text": u1, "rationale": "复用我方历史真实说法，顺着对方当下的点接住"},
+        {"label": "顺着唠", "text": u2, "rationale": "接地气生活大白话同频畅聊"},
+        {"label": "打趣一下", "text": slot4_text, "rationale": "融入画面感逗乐对方"},
+        {"label": "约下次", "text": slot6_text, "rationale": "自然提出共同体验与陪伴"}
     ]
