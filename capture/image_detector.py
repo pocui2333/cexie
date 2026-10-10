@@ -138,21 +138,38 @@ def fallback_macos_vision_classify(crop_path: str) -> Optional[str]:
         pass
     return None
 
+def is_wechat_green_bubble(pil_crop: Image.Image) -> bool:
+    """
+    检查切片是否为微信我方绿色文字气泡。
+    微信特有的我方绿色气泡 (#95EC69 ~ #A0EA70) 绝对是我方文字发言，绝不可能是聊天图片！
+    """
+    thumb = pil_crop.resize((24, 24), Image.Resampling.BOX).convert("RGB")
+    pixels = list(thumb.getdata())
+    green_count = 0
+    for r, g, b in pixels:
+        if g > 85 and (g - r >= 18) and (g - b >= 15):
+            green_count += 1
+    # 只要有 15% 以上像素为微信特有绿底，即判定为我方发言气泡
+    return green_count >= (len(pixels) * 0.15)
+
 def detect_chat_image_bubbles(
     cropped_img: Image.Image,
     crop_file_path: str,
     known_text_boxes: Optional[List[dict]] = None
 ) -> List[Dict[str, Any]]:
     """
-    探测聊天视口中的所有图片/照片气泡，并转化为语义文本元素:
-    返回格式: [{"role": "TARGET"|"EGO", "text": "[图片: ...]", "y": float, "box": (x, y, w, h)}]
+    探测聊天视口中的真实照片/图片气泡，并转化为语义文本元素:
+    严格防线：
+    1. 绿色气泡绝对是我方文字发言，100% 严禁判定为图片！
+    2. 头像 (左边缘对方头像、右边缘我方头像) 100% 严禁判定为图片！
+    3. 已有 OCR 文本的气泡 100% 严禁判定为图片！
     """
     w, h = cropped_img.size
     url = NSURL.fileURLWithPath_(crop_file_path)
     handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, NSDictionary.dictionary())
     req = Vision.VNDetectRectanglesRequest.alloc().init()
-    req.setMinimumSize_(0.06)
-    req.setMaximumObservations_(15)
+    req.setMinimumSize_(0.08)
+    req.setMaximumObservations_(10)
 
     success, _ = handler.performRequests_error_([req], None)
     if not success or not req.results():
@@ -168,63 +185,73 @@ def detect_chat_image_bubbles(
         bw = int(bb.size.width * w)
         bh = int(bb.size.height * h)
 
-        # 1. 过滤边缘头像: 靠左(x < 0.08)或靠右(x > 0.92)且尺寸在头像区间的排除
         rel_x = bx / float(w)
-        if (rel_x < 0.06 and bw < int(w * 0.12)) or (rel_x > 0.88 and bw < int(w * 0.12)):
+        rel_right = (bx + bw) / float(w)
+
+        # 1. 严格过滤头像：微信单聊左右两侧边缘均为用户头像，绝非聊天图片
+        # 左侧头像区：rel_x < 0.15；右侧头像区：rel_right > 0.85
+        # 且头像尺寸通常在 40~120px 之间，呈 1:1 方形
+        is_avatar_position = (rel_x < 0.15) or (rel_right > 0.85)
+        aspect = bw / float(bh) if bh > 0 else 1.0
+        if is_avatar_position and (0.75 <= aspect <= 1.35) and (bw <= 130 and bh <= 130):
             continue
 
-        # 2. 过滤过小或过长条的非图片杂块
-        if bw < 80 or bh < 60:
+        # 2. 过滤过小或长宽比极端的杂块
+        if bw < 90 or bh < 75:
             continue
-        aspect = bw / float(bh)
-        if aspect > 5.0 or aspect < 0.2:
+        if aspect > 4.5 or aspect < 0.22:
             continue
 
-        # 2.5 检查是否与已知纯文本气泡重叠 (避免将单行/多行普通文字气泡误判为图片)
-        if known_text_boxes:
-            is_pure_text_bubble = False
-            for tb in known_text_boxes:
-                tx = int(tb["x"] * w)
-                ty = int((1.0 - tb["y"] - tb["h"]) * h)
-                tw = int(tb["w"] * w)
-                th = int(tb["h"] * h)
-                tc_x = tx + tw / 2
-                tc_y = ty + th / 2
-                if bx <= tc_x <= bx + bw and by <= tc_y <= by + bh:
-                    # 文字占矩形主要高度，或为我方绿底气泡，判定为普通文字气泡
-                    if th > 0.30 * bh or tb.get("has_green"):
-                        is_pure_text_bubble = True
-                        break
-            if is_pure_text_bubble:
-                continue
-
-        # 3. 裁剪并分析色彩丰富度
+        # 3. 裁剪并做强特征排查
         crop_box = (max(0, bx), max(0, by), min(w, bx + bw), min(h, by + bh))
         pil_crop = cropped_img.crop(crop_box)
-        variance = calculate_image_variance(pil_crop)
 
-        # 若颜色方差很低 (纯白/纯灰/纯绿)，说明是纯文字气泡或空白背景，跳过
-        if variance < 28.0:
+        # 核心防线：检查是否为微信绿色气泡！绿色气泡必须是我方文本发言，绝不是图片！
+        if is_wechat_green_bubble(pil_crop):
             continue
 
-        # 4. 判断发送方: 靠右侧为 EGO (我方)，靠左侧为 TARGET (对方)
+        # 4. 检查是否与已知纯文本气泡重叠 (普通文字气泡绝不能误当成图片)
+        if known_text_boxes:
+            is_text_bubble = False
+            for tb in known_text_boxes:
+                tx = int(tb["x"] * w) if tb["x"] <= 1.0 else int(tb["x"])
+                ty = int((1.0 - tb["y"] - tb["h"]) * h) if tb["y"] <= 1.0 else int(tb["y"])
+                tw = int(tb["w"] * w) if tb["w"] <= 1.0 else int(tb["w"])
+                th = int(tb["h"] * h) if tb["h"] <= 1.0 else int(tb["h"])
+                # 检查交集重叠
+                intersect_w = max(0, min(bx + bw, tx + tw) - max(bx, tx))
+                intersect_h = max(0, min(by + bh, ty + th) - max(by, ty))
+                if intersect_w > 15 and intersect_h > 15:
+                    is_text_bubble = True
+                    break
+            if is_text_bubble:
+                continue
+
+        # 5. 分析色彩丰富度，排除单色空白背景与普通浅灰纯文字气泡
+        variance = calculate_image_variance(pil_crop)
+        if variance < 32.0:
+            continue
+
+        # 6. 判断发送方: 靠右侧为 EGO (我方)，靠左侧为 TARGET (对方)
         center_x = (bx + bw / 2) / float(w)
         role = "EGO" if center_x > 0.55 else "TARGET"
 
-        # 5. 调用 VLM 进行多模态视觉描述提取
+        # 7. 调用多模态描述
         desc = describe_image_via_vlm(pil_crop)
         if not desc:
-            # 临时保存切片供本地分类
             tmp_crop_path = f"/tmp/echolens_img_crop_{bx}_{by}.jpg"
             pil_crop.convert("RGB").save(tmp_crop_path, "JPEG")
             desc = fallback_macos_vision_classify(tmp_crop_path)
 
         if not desc:
-            desc = "照片/图片分享"
+            continue
 
-        # 6. 计算 Vision 归一化 y 坐标 (原点在左下角，便于与 OCR 文本自上而下对齐)
+        # 8. 语义后验防线：若模型误将 UI 元素、头像或气泡文字描述出来，坚决丢弃
+        noise_descs = ["聊天气泡", "绿色气泡", "头像", "文字", "聊天界面", "对话框", "深色短发", "白衬衫"]
+        if any(nd in desc for nd in noise_descs):
+            continue
+
         norm_y = 1.0 - ((by + bh / 2) / float(h))
-
         detected_images.append({
             "role": role,
             "text": f"[图片: {desc}]",

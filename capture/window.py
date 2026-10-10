@@ -24,8 +24,8 @@ def ensure_wechat_unminimized():
     except Exception:
         pass
 
-def find_wechat_main_window_id(retry_unminimize: bool = True) -> Optional[int]:
-    """通过 Quartz CGWindowList 获取微信主聊天窗口 ID"""
+def find_wechat_main_window_id(expected_target: Optional[str] = None, retry_unminimize: bool = True) -> Optional[int]:
+    """通过 Quartz CGWindowList 获取微信主聊天窗口 ID (支持独立窗口与屏幕在显优化)"""
     try:
         from Quartz import (
             CGWindowListCopyWindowInfo,
@@ -34,7 +34,9 @@ def find_wechat_main_window_id(retry_unminimize: bool = True) -> Optional[int]:
             kCGWindowOwnerName,
             kCGWindowNumber,
             kCGWindowBounds,
-            kCGWindowLayer
+            kCGWindowLayer,
+            kCGWindowName,
+            kCGWindowIsOnscreen
         )
         windows = CGWindowListCopyWindowInfo(kCGWindowListExcludeDesktopElements, kCGNullWindowID)
         candidates = []
@@ -47,18 +49,26 @@ def find_wechat_main_window_id(retry_unminimize: bool = True) -> Optional[int]:
                 height = b.get("Height", 0)
                 # 排除微型小图标或悬浮窗，保留主聊天大窗口
                 if width > 400 and height > 400:
-                    candidates.append((w.get(kCGWindowNumber), width * height))
+                    priority = 0
+                    w_name = w.get(kCGWindowName, "") or ""
+                    # 若独立单聊窗口名直接命中目标备注，赋予极高优先级
+                    if expected_target and w_name and (expected_target in w_name or w_name in expected_target):
+                        priority += 1000
+                    # 屏幕在显窗口加分
+                    if w.get(kCGWindowIsOnscreen, False):
+                        priority += 100
+                    candidates.append((w.get(kCGWindowNumber), priority, width * height))
 
         if candidates:
-            # 选面积最大、最像主窗口的
-            candidates.sort(key=lambda x: -x[1])
+            # 选优先级最高、面积最大的
+            candidates.sort(key=lambda x: (-x[1], -x[2]))
             return candidates[0][0]
 
         # 若未找到且允许重试，尝试静默恢复最小化窗口
         if retry_unminimize:
             ensure_wechat_unminimized()
             time.sleep(0.2)
-            return find_wechat_main_window_id(retry_unminimize=False)
+            return find_wechat_main_window_id(expected_target=expected_target, retry_unminimize=False)
 
     except Exception as e:
         print(f"[Window Finder Error] {e}")

@@ -453,7 +453,7 @@ html, body {
     word-break: break-all;
     white-space: pre-wrap;
     box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45);
-    max-height: 58px;
+    max-height: 68px;
     overflow-y: auto;
     transition: none !important;
 }
@@ -470,7 +470,7 @@ html, body {
     word-break: break-all;
     white-space: pre-wrap;
     box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45);
-    max-height: 50px;
+    max-height: 68px;
     overflow-y: auto;
     transition: none !important;
 }

@@ -211,13 +211,18 @@ class EchoLensService:
         self.current_context = snapshot.dialogue_context
 
         if snapshot.case_type == 1:
-            self.cached_options = []
-            self.cached_insight = {"subtext": "", "risk_alert": "", "keywords": []}
             if not getattr(self, "last_outgoing_time", None):
                 self.last_outgoing_time = time.time()
             if snapshot.ego_text and snapshot.ego_text != "暂未回复":
                 self.last_outgoing_reply = snapshot.ego_text
                 self.state_machine.feed_outgoing_reply(snapshot.ego_text)
+            self._refresh_options(
+                target,
+                self.current_incoming,
+                snapshot.dialogue_context,
+                is_replied=True,
+                ego_text=snapshot.ego_text
+            )
         else:
             self.last_outgoing_time = None
             self.state_machine.feed_incoming_message(target, self.current_incoming)
@@ -227,18 +232,22 @@ class EchoLensService:
         if snapshot.raw_turns:
             self.distiller.distill_and_archive_turns(target, snapshot.raw_turns, time_hint=snapshot.time_hint)
 
-    def _refresh_options(self, target_name: str, incoming_text: str, context_text: Optional[str] = None):
-        if self.current_reply_status == "replied":
-            self.cached_options = []
-            self.cached_insight = {"subtext": "", "risk_alert": "", "keywords": []}
-            return
+    def _refresh_options(
+        self,
+        target_name: str,
+        incoming_text: str,
+        context_text: Optional[str] = None,
+        is_replied: bool = False,
+        ego_text: Optional[str] = None
+    ):
         self.current_incoming = incoming_text
         if context_text is not None:
             self.current_context = context_text
         memory_episodes = self.memory.retrieve_memory(target_name, incoming_text, self.current_context)
         today_memory = self.memory.get_today_working_memory(target_name)
         result = self.generator.generate(
-            target_name, incoming_text, memory_episodes, self.current_context, today_memory=today_memory
+            target_name, incoming_text, memory_episodes, self.current_context,
+            today_memory=today_memory, is_replied=is_replied, last_ego_text=ego_text
         )
         self.cached_options = [opt.to_dict() for opt in result.options]
         self.cached_insight = {

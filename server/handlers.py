@@ -278,15 +278,23 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
             service_instance.current_context = snapshot.dialogue_context
 
             if snapshot.case_type == 1:
-                # 情况 1: 最后一条是我的回复 -> 标记为已回复，清空下方旧推荐选项
-                service_instance.cached_options = []
+                # 情况 1: 最后一条是我的回复 -> 标记为已回复，并生成【主动推进/延伸话轮】的 6 档下一步建议！
                 if not getattr(service_instance, "last_outgoing_time", None):
                     service_instance.last_outgoing_time = time.time()
                 if snapshot.ego_text and snapshot.ego_text != "暂未回复":
                     service_instance.last_outgoing_reply = snapshot.ego_text
                     service_instance.state_machine.feed_outgoing_reply(snapshot.ego_text)
 
-                msg_tip = "已抓取并沉淀记忆（当前已回复）" if recorded else "已同步最新对话（当前已回复）"
+                # 生成下一步主动推进建议 (绝不清空推荐卡片)
+                service_instance._refresh_options(
+                    target,
+                    service_instance.current_incoming,
+                    snapshot.dialogue_context,
+                    is_replied=True,
+                    ego_text=snapshot.ego_text
+                )
+
+                msg_tip = "已抓取并沉淀记忆（已生成推进建议）" if recorded else "已同步最新对话（已生成推进建议）"
                 self._send_json({
                     "status": "success",
                     "target": target,
@@ -296,7 +304,8 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
                     "incoming_text": service_instance.current_incoming,
                     "ego_text": service_instance.current_ego_reply,
                     "reply_status": "replied",
-                    "options": [],
+                    "options": service_instance.cached_options,
+                    "insight": service_instance.cached_insight,
                     "stats": service_instance.get_stats(target),
                     "message": msg_tip
                 })

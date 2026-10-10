@@ -1,1022 +1,174 @@
 /**
- * 侧写 (Cexie) - HUD 交互引擎与数据协同控制器
+ * 侧写 (Cexie) - HUD 交互总线与协同中枢 (App Orchestrator)
  * 
  * 核心架构准则：
- * 1. 纯视图呈现：完全通过 /api/poll 与 /api/trigger 获取后端单源数据并渲染；
- * 2. 脏检查机制 (Dirty-Diffing)：数据不变时绝不触碰或重构 DOM，杜绝闪烁与布局震荡；
- * 3. 尺寸收敛防抖：高度按内容自适应，窗口调整严格收敛，严禁高频向系统发起无谓 resize；
- * 4. 极速响应：点击即复制（含视觉反馈），抓取按钮 500ms 安全防重防抖。
+ * 1. 严格模块化解耦：上下文展示、建议卡片、互动统计、抓取控制、数据摄取与窗口管理均独立为单一职责模块；
+ * 2. 故障完全隔离：各模块在总线分发中通过 try-catch 严格沙箱隔离，任何单一模块的异常绝不波及其他模块；
+ * 3. 响应式单向数据流：通过定时轮询及抓取回调获取单源数据，切片分发至各模块；
+ * 4. 极致平滑：支持按窗口焦点自适应调节轮询频率，结合各模块自身的脏检查机制杜绝 UI 闪烁。
  */
 
-class EchoLensHUD {
+class EchoLensApp {
     constructor() {
-        this.activeTarget = '';
-        this.isCollapsed = false;
-        this.currentView = 'monitor'; // 'monitor' | 'ingest'
         this.pollTimer = null;
-        this.isCapturing = false;
-        this.lastCaptureTime = 0;
-        this.currentFittedHeight = null;
-        this.lastFittedHeight = 420;
+        this.isWindowFocused = true;
 
-        // 自动循环抓取状态 (60秒自动轮询)
-        this.autoLoopTimer = null;
-        this.autoLoopCountdown = 60;
-        this.isAutoLooping = false;
-
-        // 统计面板与计时状态
-        this.lastReplyTimestamp = null;
-        this.statsTimerInterval = null;
-        this.lastStatsSignature = null;
-
-        // 脏检查签名缓存 (Dirty Checking Caches)
-        this.lastRenderedIncoming = null;
-        this.lastRenderedEgo = null;
-        this.lastRenderedStatus = null;
-        this.lastOptionsSignature = null;
-
-        this.initDOMElements();
-        this.bindEvents();
-        this.fetchContacts();
-        this.startPolling();
+        this.initModules();
+        this.initPolling();
 
         // 初始自适应一次高度
-        setTimeout(() => this.fitWindowToContent(true), 100);
-    }
-
-    initDOMElements() {
-        this.capsulePanel = document.getElementById('capsule-panel');
-        this.capsuleText = document.getElementById('capsule-text');
-        this.btnExpand = document.getElementById('btn-expand');
-        this.btnCapsuleQuit = document.getElementById('btn-capsule-quit');
-
-        this.mainContainer = document.getElementById('main-container');
-        this.targetSelect = document.getElementById('target-select');
-        this.btnToggleView = document.getElementById('btn-toggle-view');
-        this.btnFold = document.getElementById('btn-fold');
-        this.btnQuit = document.getElementById('btn-quit');
-
-        this.viewMonitor = document.getElementById('view-monitor');
-        this.viewIngest = document.getElementById('view-ingest');
-
-        // 看板元素
-        this.btnTriggerCapture = document.getElementById('btn-trigger-capture');
-        this.btnAutoLoop = document.getElementById('btn-auto-loop');
-        this.targetSenderName = document.getElementById('target-sender-name');
-        this.targetMessageTime = document.getElementById('target-message-time');
-        this.incomingBox = document.getElementById('incoming-message-box');
-        this.egoMessageBox = document.getElementById('ego-message-box');
-        this.dualTrackGrid = document.getElementById('dual-track-grid');
-
-        // 僚机洞察脚手架元素
-        this.insightSection = document.getElementById('insight-scaffolding-section');
-        this.insightSubtextText = document.getElementById('insight-subtext-text');
-        this.insightRiskRow = document.getElementById('insight-risk-row');
-        this.insightRiskText = document.getElementById('insight-risk-text');
-        this.insightChipsContainer = document.getElementById('insight-chips-container');
-
-        // 统计面板元素
-        this.statsSection = document.getElementById('stats-section');
-        this.statsStatusTag = document.getElementById('stats-status-tag');
-        this.statEgoRatio = document.getElementById('stat-ego-ratio');
-        this.statTargetRatio = document.getElementById('stat-target-ratio');
-        this.statProgressFill = document.getElementById('stat-progress-fill');
-        this.statBalanceTip = document.getElementById('stat-balance-tip');
-        this.statBalanceDesc = document.getElementById('stat-balance-desc');
-        this.statWarmthBadge = document.getElementById('stat-warmth-badge');
-        this.statWarmthScore = document.getElementById('stat-warmth-score');
-        this.statWarmthWindow = document.getElementById('stat-warmth-window');
-        this.statWarmthFill = document.getElementById('stat-warmth-fill');
-        this.statWarmthTactic = document.getElementById('stat-warmth-tactic');
-        this.statDynamicBadge = document.getElementById('stat-dynamic-badge');
-        this.statDynamicTitle = document.getElementById('stat-dynamic-title');
-        this.statDynamicDesc = document.getElementById('stat-dynamic-desc');
-        this.statTagsContainer = document.getElementById('stat-tags-container');
-
-        // 摄取中心导航与各子标签元素
-        this.ingestTabBtns = document.querySelectorAll('.ingest-tab-btn');
-        this.tabPanes = {
-            contact: document.getElementById('tab-pane-contact'),
-            history: document.getElementById('tab-pane-history'),
-            knowledge: document.getElementById('tab-pane-knowledge')
-        };
-
-        // Tab 1: 联系人建档
-        this.btnFillCurrentTarget = document.getElementById('btn-fill-current-target');
-        this.archetypeChips = document.getElementById('archetype-chips');
-        this.inputTargetName = document.getElementById('input-target-name');
-        this.inputFreeText = document.getElementById('input-free-text');
-        this.folderDropzone = document.getElementById('folder-dropzone');
-        this.dropzoneText = document.getElementById('dropzone-text');
-        this.inputFolderPath = document.getElementById('input-folder-path');
-        this.btnResetForm = document.getElementById('btn-reset-form');
-        this.btnSubmitOnboard = document.getElementById('btn-submit-onboard');
-
-        // Tab 2: 增量聊天追加分析
-        this.selectIncrementalTarget = document.getElementById('select-incremental-target');
-        this.historyDropzone = document.getElementById('history-dropzone');
-        this.historyDropzoneText = document.getElementById('history-dropzone-text');
-        this.inputHistoryPath = document.getElementById('input-history-path');
-        this.incrementalFeedback = document.getElementById('incremental-feedback');
-        this.btnSubmitIncremental = document.getElementById('btn-submit-incremental');
-
-        // Tab 3: 知识库微策略提炼
-        this.inputKbTitle = document.getElementById('input-kb-title');
-        this.inputKbText = document.getElementById('input-kb-text');
-        this.kbDropzone = document.getElementById('kb-dropzone');
-        this.kbDropzoneText = document.getElementById('kb-dropzone-text');
-        this.inputKbFilePath = document.getElementById('input-kb-file-path');
-        this.kbFeedback = document.getElementById('kb-feedback');
-        this.btnSubmitKnowledge = document.getElementById('btn-submit-knowledge');
-    }
-
-    bindEvents() {
-        // 1. 窗口折叠与展开
-        if (this.btnFold) this.btnFold.addEventListener('click', () => this.setCollapsed(true));
-        if (this.btnExpand) this.btnExpand.addEventListener('click', () => this.setCollapsed(false));
-
-        // 2. 退出应用
-        if (this.btnQuit) this.btnQuit.addEventListener('click', () => this.quitApp());
-        if (this.btnCapsuleQuit) this.btnCapsuleQuit.addEventListener('click', () => this.quitApp());
-
-        // 3. 视图切换
-        if (this.btnToggleView) {
-            this.btnToggleView.addEventListener('click', () => {
-                this.switchView(this.currentView === 'monitor' ? 'ingest' : 'monitor');
-            });
-        }
-
-        // 4. 手动锁定目标联系人
-        if (this.targetSelect) {
-            this.targetSelect.addEventListener('change', (e) => {
-                const target = e.target.value;
-                if (!target) return;
-                this.activeTarget = target;
-                this.updateCapsuleText();
-                fetch('/api/target', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ target })
-                }).then(() => {
-                    this.lastOptionsSignature = null; // 切换联系人时清空缓存触发重新渲染
-                    this.fetchPollData();
-                }).catch(() => {});
-            });
-        }
-
-        // 5. 抓取最新 (500ms 快速防重节流)
-        if (this.btnTriggerCapture) {
-            this.btnTriggerCapture.addEventListener('click', () => this.triggerCapture());
-        }
-
-        // 5.1 自动循环抓取 (60秒循环 / 停止)
-        if (this.btnAutoLoop) {
-            this.btnAutoLoop.addEventListener('click', () => this.toggleAutoLoop());
-        }
-
-        // 6. 卡片与破局灵感胶囊点击即复制 (事件委托)
-        if (this.mainContainer) {
-            this.mainContainer.addEventListener('click', (e) => {
-                const card = e.target.closest('.option-card');
-                if (card) {
-                    const replyText = card.getAttribute('data-reply');
-                    if (replyText) {
-                        this.copyToClipboard(replyText, card);
-                    }
-                    return;
-                }
-                const chip = e.target.closest('.chip-pill');
-                if (chip) {
-                    const kw = chip.getAttribute('data-keyword') || chip.textContent;
-                    if (kw) {
-                        this.copyKeyword(kw, chip);
-                    }
-                    return;
-                }
-            });
-        }
-
-        // 7. 摄取中心子标签切换
-        if (this.ingestTabBtns) {
-            this.ingestTabBtns.forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const tabKey = btn.getAttribute('data-tab');
-                    this.switchIngestTab(tabKey);
-                });
-            });
-        }
-
-        // 8. Tab 1: 联系人建档与初始分析
-        if (this.btnFillCurrentTarget) {
-            this.btnFillCurrentTarget.addEventListener('click', () => {
-                if (this.activeTarget && this.inputTargetName) {
-                    this.inputTargetName.value = this.activeTarget;
-                }
-            });
-        }
-
-        if (this.archetypeChips) {
-            this.archetypeChips.addEventListener('click', (e) => {
-                const chip = e.target.closest('.arch-chip');
-                if (!chip) return;
-                const text = chip.getAttribute('data-text');
-                if (!text || !this.inputFreeText) return;
-                const cur = this.inputFreeText.value.trim();
-                if (!cur) {
-                    this.inputFreeText.value = text;
-                } else if (!cur.includes(text)) {
-                    this.inputFreeText.value = `${cur}\n${text}`;
-                }
-                chip.classList.add('selected');
-                setTimeout(() => chip.classList.remove('selected'), 400);
-            });
-        }
-
-        this.bindDropzone(this.folderDropzone, this.dropzoneText, this.inputFolderPath, '拖入聊天记录目录或单文件 (CSV/JSON/TXT)');
-
-        if (this.btnResetForm) {
-            this.btnResetForm.addEventListener('click', () => {
-                if (this.inputTargetName) this.inputTargetName.value = '';
-                if (this.inputFreeText) this.inputFreeText.value = '';
-                if (this.inputFolderPath) this.inputFolderPath.value = '';
-                if (this.dropzoneText) this.dropzoneText.textContent = '拖入聊天记录目录或单文件 (CSV/JSON/TXT)';
-            });
-        }
-
-        if (this.btnSubmitOnboard) {
-            this.btnSubmitOnboard.addEventListener('click', () => this.submitOnboard());
-        }
-
-        // 9. Tab 2: 追加增量聊天
-        this.bindDropzone(this.historyDropzone, this.historyDropzoneText, this.inputHistoryPath, '拖入新的聊天记录目录或单文件 (CSV/JSON/TXT)');
-        if (this.btnSubmitIncremental) {
-            this.btnSubmitIncremental.addEventListener('click', () => this.submitIncrementalHistory());
-        }
-
-        // 10. Tab 3: 知识库微策略提炼
-        this.bindDropzone(this.kbDropzone, this.kbDropzoneText, this.inputKbFilePath, '或将 md/txt 文件拖入此处');
-        if (this.btnSubmitKnowledge) {
-            this.btnSubmitKnowledge.addEventListener('click', () => this.submitKnowledge());
-        }
-    }
-
-    setCollapsed(collapsed) {
-        this.isCollapsed = collapsed;
-        if (collapsed) {
-            this.mainContainer.classList.add('hidden');
-            this.capsulePanel.classList.remove('hidden');
-            this.updateCapsuleText();
-            fetch('/api/window/resize', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ mode: 'capsule' })
-            }).catch(() => {});
-        } else {
-            this.capsulePanel.classList.add('hidden');
-            this.mainContainer.classList.remove('hidden');
-            this.currentFittedHeight = null;
-            const targetH = this.lastFittedHeight || 420;
-            fetch('/api/window/resize', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ mode: 'custom', width: 430, height: targetH })
-            }).catch(() => {});
-            setTimeout(() => this.fitWindowToContent(true), 80);
-        }
-    }
-
-    switchView(viewName) {
-        this.currentView = viewName;
-        if (viewName === 'ingest') {
-            this.viewMonitor.classList.add('hidden');
-            this.viewIngest.classList.remove('hidden');
-            this.btnToggleView.textContent = '返回监控';
-        } else {
-            this.viewIngest.classList.add('hidden');
-            this.viewMonitor.classList.remove('hidden');
-            this.btnToggleView.textContent = '导入建档';
-        }
-        this.currentFittedHeight = null;
-        this.fitWindowToContent(true);
-    }
-
-    updateCapsuleText() {
-        if (this.capsuleText) {
-            this.capsuleText.textContent = `侧写 · ${this.activeTarget || '就绪'}`;
-        }
-    }
-
-    quitApp() {
-        if (this.isAutoLooping) {
-            this.toggleAutoLoop();
-        }
-        fetch('/api/quit', { method: 'POST' }).catch(() => {});
         setTimeout(() => {
-            try {
-                window.close();
-            } catch (_) {}
+            if (this.windowManager) {
+                this.windowManager.fitWindowToContent(true);
+            }
         }, 120);
     }
 
-    toggleAutoLoop() {
-        const nextState = !this.isAutoLooping;
-        fetch('/api/autoloop', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: nextState })
-        }).then(r => r.json()).then(data => {
-            this.isAutoLooping = !!data.auto_loop_enabled;
-            this.updateAutoLoopButton(data.auto_loop_countdown);
-        }).catch(() => {});
-    }
-
-    updateAutoLoopButton(countdown) {
-        if (!this.btnAutoLoop) return;
-        if (this.isAutoLooping) {
-            this.btnAutoLoop.classList.add('active');
-            this.btnAutoLoop.textContent = `停止 (${countdown || 60}s)`;
-            this.btnAutoLoop.title = '点击停止自动循环抓取';
-        } else {
-            this.btnAutoLoop.classList.remove('active');
-            this.btnAutoLoop.textContent = '自动循环';
-            this.btnAutoLoop.title = '开启每60秒自动循环抓取';
-        }
-    }
-
-    copyToClipboard(text, cardElement) {
-        navigator.clipboard.writeText(text).then(() => {
-            cardElement.classList.add('copied-glow');
-            const badge = cardElement.querySelector('.copy-badge');
-            if (badge) {
-                const prev = badge.textContent;
-                badge.textContent = '已复制';
-                setTimeout(() => {
-                    cardElement.classList.remove('copied-glow');
-                    badge.textContent = prev;
-                }, 800);
-            }
-        }).catch(err => {
-            console.error('复制失败', err);
-        });
-    }
-
-    copyKeyword(kw, chipElement) {
-        if (!kw) return;
-        navigator.clipboard.writeText(kw).then(() => {
-            if (chipElement) {
-                const orig = chipElement.textContent;
-                chipElement.textContent = '已复制';
-                chipElement.classList.add('copied');
-                setTimeout(() => {
-                    chipElement.textContent = orig;
-                    chipElement.classList.remove('copied');
-                }, 900);
-            }
-        }).catch(err => {
-            console.error('复制词汇失败', err);
-        });
-    }
-
-    triggerCapture() {
-        const now = Date.now();
-        // 500ms 快速冷却防抖
-        if (this.isCapturing || (now - this.lastCaptureTime < 500)) {
-            return;
-        }
-        this.isCapturing = true;
-        this.lastCaptureTime = now;
-
-        // 若处于自动循环中，重置倒计时为 60s，避免刚手动抓完短时间内又重复抓取
-        if (this.isAutoLooping) {
-            this.autoLoopCountdown = 60;
-            if (this.btnAutoLoop) {
-                this.btnAutoLoop.textContent = `停止 (${this.autoLoopCountdown}s)`;
-            }
-        }
-
-        if (this.btnTriggerCapture) {
-            this.btnTriggerCapture.textContent = '抓取中...';
-            this.btnTriggerCapture.disabled = true;
-            this.btnTriggerCapture.style.pointerEvents = 'none';
-        }
-
-        const resetBtnState = (delay = 500, text = '抓取最新', color = '') => {
-            setTimeout(() => {
-                if (this.btnTriggerCapture) {
-                    this.btnTriggerCapture.textContent = text;
-                    this.btnTriggerCapture.style.color = color;
-                    this.btnTriggerCapture.disabled = false;
-                    this.btnTriggerCapture.style.pointerEvents = 'auto';
+    initModules() {
+        // 1. 窗口与全局状态管理模块
+        this.windowManager = new WindowManager({
+            onTargetChanged: (target) => {
+                if (this.recommendationBoard) {
+                    this.recommendationBoard.lastSignature = null;
                 }
-                this.isCapturing = false;
-            }, delay);
-        };
-
-        fetch('/api/trigger', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target: this.activeTarget })
-        })
-        .then(res => res.json())
-        .then(data => {
-            if (this.btnTriggerCapture) {
-                if (data.status === 'busy') {
-                    this.btnTriggerCapture.textContent = '分析中...';
-                    this.btnTriggerCapture.style.color = '#38bdf8';
-                    resetBtnState(300);
-                    return;
-                } else if (data.status === 'mismatch') {
-                    const detected = data.detected || '其他窗口';
-                    this.btnTriggerCapture.textContent = `目标不符: ${detected.slice(0, 6)}`;
-                    this.btnTriggerCapture.style.color = '#f87171';
-                    if (this.incomingBox) {
-                        const originalIncoming = this.incomingBox.textContent;
-                        this.incomingBox.innerHTML = `<span style="color:#f87171;font-weight:600;">【安全阻断】当前微信停留在「${detected}」，非目标「${data.target}」！<br>请在微信中切换至目标聊天窗口后再点击抓取。</span>`;
-                        setTimeout(() => {
-                            if (this.incomingBox.innerHTML.includes('【安全阻断】')) {
-                                this.incomingBox.textContent = originalIncoming;
-                            }
-                        }, 3000);
-                    }
-                    resetBtnState(1200);
-                    return;
-                } else if (data.recorded) {
-                    this.btnTriggerCapture.textContent = '已更新并沉淀';
-                    this.btnTriggerCapture.style.color = '#34d399';
-                    resetBtnState(500);
-                } else if (data.case_type === 1) {
-                    this.btnTriggerCapture.textContent = '已同步回复';
-                    this.btnTriggerCapture.style.color = '#34d399';
-                    resetBtnState(500);
-                } else {
-                    this.btnTriggerCapture.textContent = '已更新建议';
-                    this.btnTriggerCapture.style.color = '#38bdf8';
-                    resetBtnState(500);
-                }
-            }
-            this.renderPollData(data);
-        })
-        .catch(err => {
-            console.error('抓取失败', err);
-            resetBtnState(300);
-        });
-    }
-
-    fetchContacts() {
-        fetch('/api/contacts')
-            .then(res => res.json())
-            .then(data => {
-                if (data.contacts && data.contacts.length > 0) {
-                    if (!this.activeTarget || !data.contacts.includes(this.activeTarget)) {
-                        this.activeTarget = data.active_target || data.contacts[0];
-                    }
-                    if (this.targetSelect) {
-                        this.targetSelect.innerHTML = '';
-                        data.contacts.forEach(c => {
-                            const opt = document.createElement('option');
-                            opt.value = c;
-                            opt.textContent = c;
-                            if (c === this.activeTarget) opt.selected = true;
-                            this.targetSelect.appendChild(opt);
-                        });
-                        this.targetSelect.value = this.activeTarget;
-                    }
-                    if (this.selectIncrementalTarget) {
-                        this.selectIncrementalTarget.innerHTML = '';
-                        data.contacts.forEach(c => {
-                            const opt = document.createElement('option');
-                            opt.value = c;
-                            opt.textContent = c;
-                            if (c === this.activeTarget) opt.selected = true;
-                            this.selectIncrementalTarget.appendChild(opt);
-                        });
-                        this.selectIncrementalTarget.value = this.activeTarget;
-                    }
-                    this.updateCapsuleText();
-                }
-            })
-            .catch(() => {});
-    }
-
-    bindDropzone(dropzoneEl, textEl, inputEl, defaultPlaceholder) {
-        if (!dropzoneEl || !inputEl) return;
-        dropzoneEl.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dropzoneEl.classList.add('dragover');
-        });
-        dropzoneEl.addEventListener('dragleave', () => {
-            dropzoneEl.classList.remove('dragover');
-        });
-        dropzoneEl.addEventListener('drop', (e) => {
-            e.preventDefault();
-            dropzoneEl.classList.remove('dragover');
-            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                const firstFile = e.dataTransfer.files[0];
-                if (firstFile.path) {
-                    inputEl.value = firstFile.path;
-                    if (textEl) {
-                        textEl.textContent = `已选择: ${firstFile.path}`;
-                    }
+                this.fetchPollData();
+            },
+            onContactsLoaded: (contacts, activeTarget) => {
+                if (this.ingestionHub) {
+                    this.ingestionHub.syncContacts(contacts, activeTarget);
                 }
             }
         });
-        inputEl.addEventListener('input', () => {
-            if (textEl) {
-                textEl.textContent = inputEl.value.trim() ? `已指定: ${inputEl.value.trim()}` : defaultPlaceholder;
-            }
-        });
-    }
 
-    switchIngestTab(tabKey) {
-        if (this.ingestTabBtns) {
-            this.ingestTabBtns.forEach(b => {
-                b.classList.toggle('active', b.getAttribute('data-tab') === tabKey);
-            });
-        }
-        if (this.tabPanes) {
-            Object.keys(this.tabPanes).forEach(k => {
-                const p = this.tabPanes[k];
-                if (p) {
-                    if (k === tabKey) {
-                        p.classList.remove('hidden');
-                        p.classList.add('active');
-                    } else {
-                        p.classList.add('hidden');
-                        p.classList.remove('active');
-                    }
+        // 2. 对话上下文展示模块 (对方消息、我方最新回复、状态指示)
+        this.contextViewer = new ContextViewer(this.windowManager);
+
+        // 3. 双轨建议卡片与破局脚手架模块
+        this.recommendationBoard = new RecommendationBoard(this.windowManager);
+
+        // 4. 今日互动与动态统计看板模块
+        this.statsBoard = new StatsBoard(this.windowManager);
+
+        // 5. 抓取与循环控制模块
+        this.captureController = new CaptureController({
+            getTarget: () => this.windowManager ? this.windowManager.activeTarget : '',
+            onCaptureSuccess: (data) => this.dispatchData(data),
+            onMismatch: (detected, target) => {
+                if (this.contextViewer) {
+                    this.contextViewer.showMismatchAlert(detected, target);
                 }
-            });
-        }
-        if (tabKey === 'history' && this.selectIncrementalTarget && this.activeTarget) {
-            this.selectIncrementalTarget.value = this.activeTarget;
-        }
-        this.currentFittedHeight = null;
-        this.fitWindowToContent(true);
-    }
-
-    submitOnboard() {
-        const name = this.inputTargetName.value.trim();
-        if (!name) {
-            alert('请填写微信备注名');
-            return;
-        }
-
-        const payload = {
-            target_name: name,
-            free_text: this.inputFreeText.value.trim(),
-            folder_path: this.inputFolderPath.value.trim()
-        };
-
-        this.btnSubmitOnboard.textContent = '正在分析建档...';
-        this.btnSubmitOnboard.disabled = true;
-
-        fetch('/api/create_contact', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        })
-        .then(res => res.json())
-        .then(data => {
-            this.btnSubmitOnboard.textContent = '智能分析并建档';
-            this.btnSubmitOnboard.disabled = false;
-            if (data.status === 'success') {
-                this.activeTarget = name;
-                this.fetchContacts();
-                this.switchView('monitor');
-            } else {
-                alert(`建档失败: ${data.message || '未知错误'}`);
             }
-        })
-        .catch(() => {
-            this.btnSubmitOnboard.textContent = '智能分析并建档';
-            this.btnSubmitOnboard.disabled = false;
         });
-    }
 
-    submitIncrementalHistory() {
-        const target = this.selectIncrementalTarget ? this.selectIncrementalTarget.value.trim() : '';
-        const folderPath = this.inputHistoryPath ? this.inputHistoryPath.value.trim() : '';
-        if (!target) {
-            alert('请先选择目标联系人');
-            return;
-        }
-        if (!folderPath) {
-            alert('请提供聊天记录文件夹或单文件路径 (可直接拖入)');
-            return;
-        }
-
-        if (this.btnSubmitIncremental) {
-            this.btnSubmitIncremental.textContent = 'AI 增量分析中...';
-            this.btnSubmitIncremental.disabled = true;
-        }
-        if (this.incrementalFeedback) {
-            this.incrementalFeedback.classList.remove('hidden');
-            this.incrementalFeedback.innerHTML = '<div class="feedback-desc">正在脱水并比对消息指纹，提炼事实事件流...</div>';
-            this.fitWindowToContent(true);
-        }
-
-        fetch('/api/ingest_history', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target, folder_path: folderPath })
-        })
-        .then(res => res.json())
-        .then(data => {
-            if (this.btnSubmitIncremental) {
-                this.btnSubmitIncremental.textContent = '追加并增量分析';
-                this.btnSubmitIncremental.disabled = false;
-            }
-            if (this.incrementalFeedback) {
-                if (data.status === 'success') {
-                    this.incrementalFeedback.innerHTML = `
-                        <div class="feedback-title">增量分析完成</div>
-                        <div class="feedback-desc">${this.escapeHtml(data.message || '')}</div>
-                        <div class="feedback-meta">解析消息: ${data.parsed_messages} 条 · 新增沉淀事件: ${data.episodes_added} 条</div>
-                    `;
-                    if (this.inputHistoryPath) this.inputHistoryPath.value = '';
-                    if (this.historyDropzoneText) this.historyDropzoneText.textContent = '拖入新的聊天记录目录或单文件 (CSV/JSON/TXT)';
-                } else {
-                    this.incrementalFeedback.innerHTML = `
-                        <div class="feedback-title" style="color: #f87171;">分析中断</div>
-                        <div class="feedback-desc">${this.escapeHtml(data.message || '未知错误')}</div>
-                    `;
+        // 6. 数据摄取与建档中心模块
+        this.ingestionHub = new IngestionHub({
+            windowManager: this.windowManager,
+            getCurrentTarget: () => this.windowManager ? this.windowManager.activeTarget : '',
+            onContactCreated: (name) => {
+                if (this.windowManager) {
+                    this.windowManager.fetchContacts(name);
+                    this.windowManager.switchView('monitor');
                 }
-                this.fitWindowToContent(true);
-            }
-        })
-        .catch(err => {
-            if (this.btnSubmitIncremental) {
-                this.btnSubmitIncremental.textContent = '追加并增量分析';
-                this.btnSubmitIncremental.disabled = false;
-            }
-            if (this.incrementalFeedback) {
-                this.incrementalFeedback.innerHTML = `
-                    <div class="feedback-title" style="color: #f87171;">网络或服务异常</div>
-                    <div class="feedback-desc">${this.escapeHtml(String(err))}</div>
-                `;
-                this.fitWindowToContent(true);
             }
         });
+
+        // 初始化联系人列表
+        this.windowManager.fetchContacts();
     }
 
-    submitKnowledge() {
-        const title = this.inputKbTitle ? this.inputKbTitle.value.trim() : '';
-        const rawText = this.inputKbText ? this.inputKbText.value.trim() : '';
-        const filePath = this.inputKbFilePath ? this.inputKbFilePath.value.trim() : '';
-
-        if (!rawText && !filePath) {
-            alert('请粘贴攻略长文或拖入 md/txt 文件');
-            return;
-        }
-
-        if (this.btnSubmitKnowledge) {
-            this.btnSubmitKnowledge.textContent = 'AI 深度提炼中...';
-            this.btnSubmitKnowledge.disabled = true;
-        }
-        if (this.kbFeedback) {
-            this.kbFeedback.classList.remove('hidden');
-            this.kbFeedback.innerHTML = '<div class="feedback-desc">正在运用认知模型提炼情景微策略卡...</div>';
-            this.fitWindowToContent(true);
-        }
-
-        fetch('/api/ingest_knowledge', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: rawText, file_path: filePath, source_title: title })
-        })
-        .then(res => res.json())
-        .then(data => {
-            if (this.btnSubmitKnowledge) {
-                this.btnSubmitKnowledge.textContent = 'AI 提炼为微策略卡';
-                this.btnSubmitKnowledge.disabled = false;
-            }
-            if (this.kbFeedback) {
-                if (data.status === 'success') {
-                    const card = data.card || data.playbook || {};
-                    this.kbFeedback.innerHTML = `
-                        <div class="feedback-title">已入库: ${this.escapeHtml(card.title || '微策略卡')}</div>
-                        <div class="feedback-desc"><strong>原则:</strong> ${this.escapeHtml(card.principle || '')}<br><strong>雷区:</strong> ${this.escapeHtml(card.taboo || '无')}</div>
-                        <div class="feedback-meta">类别: ${this.escapeHtml(card.category || '通用')} · 策略库现存: ${data.total_playbooks} 张卡片 (已即时生效)</div>
-                    `;
-                    if (this.inputKbTitle) this.inputKbTitle.value = '';
-                    if (this.inputKbText) this.inputKbText.value = '';
-                    if (this.inputKbFilePath) this.inputKbFilePath.value = '';
-                    if (this.kbDropzoneText) this.kbDropzoneText.textContent = '或将 md/txt 文件拖入此处';
-                } else {
-                    this.kbFeedback.innerHTML = `
-                        <div class="feedback-title" style="color: #f87171;">提炼中断</div>
-                        <div class="feedback-desc">${this.escapeHtml(data.message || '未知错误')}</div>
-                    `;
-                }
-                this.fitWindowToContent(true);
-            }
-        })
-        .catch(err => {
-            if (this.btnSubmitKnowledge) {
-                this.btnSubmitKnowledge.textContent = 'AI 提炼为微策略卡';
-                this.btnSubmitKnowledge.disabled = false;
-            }
-            if (this.kbFeedback) {
-                this.kbFeedback.innerHTML = `
-                    <div class="feedback-title" style="color: #f87171;">网络或服务异常</div>
-                    <div class="feedback-desc">${this.escapeHtml(String(err))}</div>
-                `;
-                this.fitWindowToContent(true);
-            }
-        });
-    }
-
-    startPolling() {
-        let isWindowFocused = true;
+    initPolling() {
         window.addEventListener('focus', () => {
-            isWindowFocused = true;
+            this.isWindowFocused = true;
             this.fetchPollData();
         });
+
         window.addEventListener('blur', () => {
-            isWindowFocused = false;
+            this.isWindowFocused = false;
         });
 
         const scheduleNext = () => {
-            // 当窗口失去焦点或处于胶囊折叠态时，拉长轮询间隔至 3500ms，极致省电省资源
-            const delay = (this.isCollapsed || !isWindowFocused) ? 3500 : 1500;
+            const isCollapsed = this.windowManager ? this.windowManager.isCollapsed : false;
+            // 当窗口失去焦点或处于胶囊折叠态时，拉长轮询间隔至 3500ms 节省资源
+            const delay = (isCollapsed || !this.isWindowFocused) ? 3500 : 1500;
             this.pollTimer = setTimeout(() => {
-                if (this.currentView === 'monitor') {
+                const currentView = this.windowManager ? this.windowManager.currentView : 'monitor';
+                if (currentView === 'monitor') {
                     this.fetchPollData();
                 }
                 scheduleNext();
             }, delay);
         };
+
         scheduleNext();
     }
 
     fetchPollData() {
         fetch('/api/poll')
             .then(res => res.json())
-            .then(data => this.renderPollData(data))
+            .then(data => this.dispatchData(data))
             .catch(() => {});
     }
 
-    renderPollData(data) {
+    /**
+     * 核心数据总线分发 (各模块沙箱隔离)
+     * @param {Object} data - 后端全量数据切片
+     */
+    dispatchData(data) {
         if (!data) return;
 
-        // 目标不符安全提示
+        // 目标不符安全阻断
         if (data.status === 'mismatch') {
             return;
         }
 
-        // 后端循环抓取状态同步
-        if (data.auto_loop_enabled !== undefined) {
-            this.isAutoLooping = !!data.auto_loop_enabled;
-            this.updateAutoLoopButton(data.auto_loop_countdown);
-        }
-
-        // 1. 目标联系人名称展示
-        if (this.targetSenderName && (data.sender_name || data.target)) {
-            const displayName = data.sender_name || data.target;
-            if (this.targetSenderName.textContent !== displayName) {
-                this.targetSenderName.textContent = displayName;
+        // 1. 同步目标联系人与顶栏信息
+        try {
+            if (this.windowManager) {
+                this.windowManager.syncTarget(data.target || data.sender_name);
             }
+        } catch (e) {
+            console.error('[App] WindowManager syncTarget failed:', e);
         }
 
-        // 2. 时间
-        if (this.targetMessageTime && data.message_time) {
-            if (this.targetMessageTime.textContent !== data.message_time) {
-                this.targetMessageTime.textContent = data.message_time;
+        // 2. 同步后台自动循环与倒计时状态
+        try {
+            if (this.captureController) {
+                this.captureController.syncState(data);
             }
+        } catch (e) {
+            console.error('[App] CaptureController syncState failed:', e);
         }
 
-        // 3. 对方消息看板 (带脏检查)
-        if (data.incoming_text && data.incoming_text !== this.lastRenderedIncoming) {
-            this.incomingBox.textContent = data.incoming_text;
-            this.lastRenderedIncoming = data.incoming_text;
-            // 文本变化可能引发高度轻微改变，调度自适应
-            this.fitWindowToContent();
-        }
-
-        // 4. 我方最新回复看板 (带脏检查)
-        const isReplied = data.reply_status === 'replied';
-        const currentEgoText = (data.ego_text && data.ego_text !== '暂未回复') ? data.ego_text : (isReplied ? '已回复' : '（暂无上一句发言）');
-        const currentStatus = isReplied ? 'replied' : 'pending';
-
-        if (currentEgoText !== this.lastRenderedEgo || currentStatus !== this.lastRenderedStatus) {
-            this.lastRenderedEgo = currentEgoText;
-            this.lastRenderedStatus = currentStatus;
-
-            if (this.egoMessageBox && this.egoStatusBadge) {
-                if (isReplied) {
-                    this.egoStatusBadge.textContent = '已回复';
-                    this.egoStatusBadge.className = 'status-badge badge-replied';
-                    this.egoMessageBox.className = 'ego-box';
-                    this.egoMessageBox.textContent = currentEgoText;
-                } else {
-                    this.egoStatusBadge.textContent = '待我回复';
-                    this.egoStatusBadge.className = 'status-badge badge-pending';
-                    this.egoMessageBox.className = 'ego-box';
-                    this.egoMessageBox.textContent = currentEgoText;
-                }
+        // 3. 更新对话上下文看板 (对方消息 + 我方最新回复)
+        try {
+            if (this.contextViewer) {
+                this.contextViewer.update(data);
             }
-            this.fitWindowToContent();
+        } catch (e) {
+            console.error('[App] ContextViewer update failed:', e);
         }
 
-        // 5. 双轨卡片与统计看板切换 (待回复时展开推荐卡片，已回复/无推荐时展示统计看板)
-        const isRepliedTurn = data.reply_status === 'replied' || !data.options || data.options.length === 0;
-        if (isRepliedTurn) {
-            if (this.lastOptionsSignature !== '__CLEARED__') {
-                this.lastOptionsSignature = '__CLEARED__';
-                this.clearCards();
+        // 4. 更新双轨建议卡片与破局脚手架
+        try {
+            if (this.recommendationBoard) {
+                this.recommendationBoard.update(data.options, data.insight);
             }
-            this.showStats(data.stats);
-        } else if (data.options && data.options.length === 6) {
-            this.hideStats();
-            const newSig = data.options.map(o => `${o.slot_id}:${o.reply_text}`).join('|') + `|${(data.insight && data.insight.subtext) || ''}`;
-            if (newSig !== this.lastOptionsSignature) {
-                this.lastOptionsSignature = newSig;
-                this.renderCards(data.options, data.insight);
+        } catch (e) {
+            console.error('[App] RecommendationBoard update failed:', e);
+        }
+
+        // 5. 更新今日互动统计面板 (无 6 档建议卡片时展示)
+        try {
+            if (this.statsBoard) {
+                this.statsBoard.update(data.stats, data.options);
             }
+        } catch (e) {
+            console.error('[App] StatsBoard update failed:', e);
         }
-    }
-
-    showStats(stats) {
-        if (!this.statsSection) return;
-        this.statsSection.style.display = 'flex';
-
-        if (stats) {
-            const sig = `${stats.today_ego_count}:${stats.today_target_count}:${stats.warmth_score}:${stats.dynamic_title}:${(stats.today_topics || []).join(',')}`;
-            if (sig !== this.lastStatsSignature) {
-                this.lastStatsSignature = sig;
-
-                // 1. 今日消息 (相互发送条数与比例)
-                const egoCnt = stats.today_ego_count || 0;
-                const tgtCnt = stats.today_target_count || 0;
-                if (this.statEgoRatio) this.statEgoRatio.textContent = `我 ${egoCnt}条 (${stats.ego_percent || 50}%)`;
-                if (this.statTargetRatio) this.statTargetRatio.textContent = `TA ${tgtCnt}条 (${stats.target_percent || 50}%)`;
-                if (this.statProgressFill) this.statProgressFill.style.width = `${stats.ego_percent || 50}%`;
-                if (this.statBalanceTip) {
-                    this.statBalanceTip.textContent = stats.msg_heat_tip || '双向互动';
-                }
-                if (this.statBalanceDesc) {
-                    this.statBalanceDesc.textContent = stats.ratio_desc || '今日互动 · 话轮均衡';
-                }
-
-                // 2. 互动热度与兴趣窗口
-                const score = (stats.warmth_score !== undefined) ? stats.warmth_score : 80;
-                if (this.statWarmthScore) this.statWarmthScore.textContent = score;
-                if (this.statWarmthBadge) {
-                    this.statWarmthBadge.textContent = stats.warmth_badge || '良好互动';
-                    if (score >= 80) {
-                        this.statWarmthBadge.className = 'stat-badge badge-amber';
-                    } else {
-                        this.statWarmthBadge.className = 'stat-badge';
-                    }
-                }
-                if (this.statWarmthWindow) this.statWarmthWindow.textContent = stats.warmth_window || '双向顺畅';
-                if (this.statWarmthFill) this.statWarmthFill.style.width = `${Math.min(100, Math.max(0, score))}%`;
-                if (this.statWarmthTactic) this.statWarmthTactic.textContent = stats.warmth_tactic || '情绪高位 · 适合顺势拉扯或邀约';
-
-                // 3. 今日动态微观分析
-                if (this.statDynamicBadge) {
-                    this.statDynamicBadge.textContent = stats.dynamic_title || '日常松弛互动';
-                }
-                if (this.statDynamicTitle) {
-                    this.statDynamicTitle.textContent = stats.dynamic_title || '日常松弛互动';
-                }
-                if (this.statDynamicDesc) {
-                    this.statDynamicDesc.textContent = stats.dynamic_desc || '老友日常碎语交流 · 氛围松弛无压力';
-                }
-
-                // 4. 今日话题焦点
-                if (this.statTagsContainer) {
-                    const tags = (stats.today_topics && stats.today_topics.length > 0) ? stats.today_topics : ['日常', '唠嗑'];
-                    this.statTagsContainer.innerHTML = tags.map(t => `<span class="stat-tag">${this.escapeHtml(t)}</span>`).join('');
-                }
-            }
-        }
-
-        this.fitWindowToContent();
-    }
-
-    hideStats() {
-        if (this.statsSection) {
-            this.statsSection.style.display = 'none';
-        }
-    }
-
-    clearCards() {
-        if (this.insightSection) {
-            this.insightSection.style.display = 'none';
-        }
-        const dualSection = document.querySelector('.dual-track-section');
-        if (dualSection) {
-            dualSection.style.display = 'none';
-        }
-        if (this.dualTrackGrid) {
-            this.dualTrackGrid.innerHTML = '';
-        }
-        const footer = document.querySelector('.monitor-footer');
-        if (footer) {
-            footer.style.display = 'none';
-        }
-        this.fitWindowToContent(true);
-    }
-
-    renderCards(options, insight) {
-        if (!options || options.length !== 6 || !this.dualTrackGrid) return;
-        this.hideStats();
-
-        // 1. 渲染僚机洞察脚手架 (潜台词洞察 + 避坑预警 + 灵感关键词胶囊)
-        if (this.insightSection) {
-            if (insight && (insight.subtext || (insight.keywords && insight.keywords.length > 0))) {
-                this.insightSection.style.display = 'flex';
-                if (this.insightSubtextText) {
-                    this.insightSubtextText.textContent = insight.subtext || '日常松弛交流 · 享受随性互动';
-                }
-                if (this.insightRiskRow && this.insightRiskText) {
-                    if (insight.risk_alert) {
-                        this.insightRiskRow.style.display = 'flex';
-                        this.insightRiskText.textContent = insight.risk_alert;
-                    } else {
-                        this.insightRiskRow.style.display = 'none';
-                    }
-                }
-                if (this.insightChipsContainer) {
-                    const kws = (insight.keywords && insight.keywords.length > 0) ? insight.keywords : [];
-                    if (kws.length > 0) {
-                        this.insightChipsContainer.innerHTML = kws.map(kw => `
-                            <span class="chip-pill" data-keyword="${this.escapeHtml(kw)}" title="点击复制词汇">${this.escapeHtml(kw)}</span>
-                        `).join('');
-                    } else {
-                        this.insightChipsContainer.innerHTML = '';
-                    }
-                }
-            } else {
-                this.insightSection.style.display = 'none';
-            }
-        }
-
-        const dualSection = document.querySelector('.dual-track-section');
-        if (dualSection) {
-            dualSection.style.display = '';
-        }
-        const footer = document.querySelector('.monitor-footer');
-        if (footer) {
-            footer.style.display = '';
-        }
-
-        const sorted = [...options].sort((a, b) => a.slot_id - b.slot_id);
-        const cardsHtml = `
-            <div class="track-header header-native">原生原话</div>
-            <div class="track-header header-evolved">微调提升</div>
-            ${sorted.map(o => {
-                const isElevated = o.slot_id >= 4;
-                const rationaleHtml = o.tactical_rationale ? `<div class="card-rationale">↳ ${this.escapeHtml(o.tactical_rationale)}</div>` : '';
-                return `
-                <div class="option-card ${isElevated ? 'card-elevated' : ''}" data-slot="${o.slot_id}" data-reply="${this.escapeHtml(o.reply_text)}">
-                    <div class="card-meta">
-                        <span class="sub-goal ${isElevated ? 'elevated-tag' : ''}">${this.escapeHtml(o.sub_goal)}</span>
-                        <span class="copy-badge">点击复制</span>
-                    </div>
-                    <div class="card-text">${this.escapeHtml(o.reply_text)}</div>
-                    ${rationaleHtml}
-                </div>
-            `;}).join('')}
-        `;
-
-        this.dualTrackGrid.innerHTML = cardsHtml;
-        this.fitWindowToContent(true);
-    }
-
-    fitWindowToContent(force = false) {
-        if (this.isCollapsed) return;
-        requestAnimationFrame(() => {
-            const container = document.getElementById('main-container');
-            if (!container || container.classList.contains('hidden')) return;
-
-            // 获取 main-container 的真实高度，收敛在合理界限内 (160px ~ 680px)
-            const targetH = Math.min(680, Math.max(160, Math.ceil(container.scrollHeight || container.offsetHeight)));
-
-            // 只有当高度阶跃差距 >= 4px 时才向 Cocoa 宿主调度系统 resize，彻底消除抖动死循环
-            if (force || Math.abs(targetH - (this.currentFittedHeight || 0)) >= 4) {
-                this.currentFittedHeight = targetH;
-                this.lastFittedHeight = targetH;
-                fetch('/api/window/resize', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode: 'custom', width: 430, height: targetH })
-                }).catch(() => {});
-            }
-        });
-    }
-
-    escapeHtml(str) {
-        if (!str) return '';
-        return String(str).replace(/&/g, '&amp;')
-                          .replace(/</g, '&lt;')
-                          .replace(/>/g, '&gt;')
-                          .replace(/"/g, '&quot;')
-                          .replace(/'/g, '&#039;');
     }
 }
 
+// 页面加载完成后启动总线
 document.addEventListener('DOMContentLoaded', () => {
-    window.echoLens = new EchoLensHUD();
+    window.echoLensApp = new EchoLensApp();
 });

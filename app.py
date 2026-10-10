@@ -43,12 +43,21 @@ def main():
         )
         service_instance.webview_window = window
         webview.start()
+        # 若悬浮窗关闭但未通过 /api/quit 显式退出，保持后台服务持续常驻
+        if service_instance.running:
+            print(f"[侧写] 悬浮窗已关闭，HTTP 后台服务持续常驻运行: {url}")
+            server_thread.join()
     except Exception as e:
-        print(f"[EchoLens] pywebview 运行退出: {e}")
+        print(f"[EchoLens] 运行异常: {e}")
+        if service_instance.running:
+            server_thread.join()
     finally:
         print("\n[EchoLens] 服务安全退出")
         service_instance.running = False
-        httpd.server_close()
+        try:
+            httpd.server_close()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()

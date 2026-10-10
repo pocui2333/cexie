@@ -5,6 +5,7 @@ and validates active contact against safety guardrails.
 import re
 from typing import Optional, Tuple, List
 from PIL import Image
+import config
 from capture.window import find_wechat_main_window_id, capture_window_screenshot
 from capture.vision_ocr import (
     run_vision_ocr,
@@ -52,63 +53,84 @@ def capture_wechat_chat_context(expected_target: Optional[str] = None) -> Tuple[
         res.dialogue_context
     )
 
-def detect_chat_left_x(img: Image.Image) -> int:
-    """动态扫描左侧联系人列表与右侧主聊天面板之间的垂直物理分割线 (跨屏幕与窗口缩放自适应)"""
-    w, h = img.size
-    y_test = int(h * 0.5)
-    for x in range(int(w * 0.20), int(w * 0.33)):
-        col_pixels = [img.getpixel((x, y))[:3] for y in range(int(h * 0.2), int(h * 0.8), 20)]
-        var = sum((p[0] - col_pixels[0][0])**2 + (p[1] - col_pixels[0][1])**2 for p in col_pixels) / len(col_pixels)
-        if var < 10:
-            left_p = img.getpixel((x - 2, y_test))[:3]
-            right_p = img.getpixel((x + 2, y_test))[:3]
-            diff = sum(abs(a - b) for a, b in zip(left_p, right_p))
-            if diff > 15:
-                return x
-    return int(w * 0.273)
-
-def detect_input_divider_y(img: Image.Image) -> int:
-    """动态从下向上扫描微信聊天气泡区与输入框之间的水平物理分割线纵坐标 (避免误触气泡边缘，跨屏幕自适应)"""
-    w, h = img.size
-    chat_left = detect_chat_left_x(img)
-    x_start = chat_left + int((w - chat_left) * 0.10)
-    x_end = int(w * 0.95)
-    # 从 85% 高度逆向向上扫描到 58% 高度，优先命中位于最下方的输入框顶部分割细线
-    for y in range(int(h * 0.85), int(h * 0.58), -1):
-        row = [img.getpixel((x, y))[:3] for x in range(x_start, x_end, 5)]
-        avg_r = sum(p[0] for p in row) / len(row)
-        avg_g = sum(p[1] for p in row) / len(row)
-        avg_b = sum(p[2] for p in row) / len(row)
-        var = sum((p[0] - avg_r)**2 + (p[1] - avg_g)**2 + (p[2] - avg_b)**2 for p in row) / len(row)
-        if var < 15:
-            # 物理细线特征：必须同时与上一行和下一行形成明暗对比 (1~2px 细线)
-            above = img.getpixel((int((x_start + x_end) / 2), y - 2))[:3]
-            below = img.getpixel((int((x_start + x_end) / 2), y + 2))[:3]
-            diff_above = sum(abs(a - b) for a, b in zip(above, (avg_r, avg_g, avg_b)))
-            diff_below = sum(abs(a - b) for a, b in zip(below, (avg_r, avg_g, avg_b)))
-            if diff_above > 8 and diff_below > 8:
-                return y
-    return int(h * 0.74)  # 兜底安全边界
-
 def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureResult:
     """
-    核心执行器：单次静默抓取并构建高内聚的 ChatCaptureResult
+    全景无损单次抓取与几何布局解析器：
+    不再物理硬裁剪窗口图片，直接对整个微信窗口全图进行单次 Vision OCR，
+    利用全局空间几何坐标解构，彻底杜绝字迹被腰斩、底部漏抓与窗口比例失调问题。
     """
-    win_id = find_wechat_main_window_id()
+    win_id = find_wechat_main_window_id(expected_target=expected_target)
     if not win_id:
         return ChatCaptureResult(reply_status="pending")
 
     tmp_win = "/tmp/echolens_wc_win.png"
-    tmp_crop = "/tmp/echolens_wc_crop.png"
-
     if not capture_window_screenshot(win_id, tmp_win):
         return ChatCaptureResult(reply_status="pending")
 
-    try:
-        # 1. 识别顶栏联系人
-        detected_contact = extract_contact_from_header(tmp_win)
+    # 【方案 A 核心优先通道】：大模型端到端空间语义解析 (彻底摆脱本地脆弱坐标规则)
+    if config.LLM_API_KEY:
+        try:
+            from capture.llm_parser import parse_chat_screen_via_llm
+            llm_data = parse_chat_screen_via_llm(tmp_win, expected_target=expected_target)
+            if llm_data and llm_data.get("contact_name"):
+                detected_contact = llm_data["contact_name"]
+                if expected_target and not is_contact_match(detected_contact, expected_target):
+                    return ChatCaptureResult(
+                        contact_name=detected_contact,
+                        reply_status="mismatch",
+                        is_mismatch=True
+                    )
+                
+                reply_status = llm_data.get("reply_status", "pending")
+                case_type = 1 if "replied" in reply_status else 2
+                incoming_text = llm_data.get("incoming_text", "")
+                ego_text = llm_data.get("ego_text", "暂未回复")
+                dialogue_context = llm_data.get("dialogue_context", f"[{detected_contact}]: {incoming_text}\n[我]: {ego_text}")
+                
+                raw_turns = []
+                if incoming_text:
+                    raw_turns.append({"role": "TARGET", "text": incoming_text, "time_hint": None, "quote": None})
+                if ego_text and ego_text != "暂未回复":
+                    raw_turns.append({"role": "EGO", "text": ego_text, "time_hint": None, "quote": None})
+                
+                return ChatCaptureResult(
+                    contact_name=detected_contact,
+                    incoming_text=incoming_text,
+                    ego_text=ego_text,
+                    reply_status="replied" if case_type == 1 else "pending",
+                    dialogue_context=dialogue_context,
+                    is_mismatch=False,
+                    case_type=case_type,
+                    raw_turns=raw_turns,
+                    time_hint=None,
+                    last_ego_text=ego_text
+                )
+        except Exception as e:
+            print(f"[LLM Parser Dispatch Warning] {e}")
 
-        # 2. 目标人安全拦截：如果与预期目标不符，立即终止
+    try:
+        img = Image.open(tmp_win)
+        w, h = img.size
+
+        # 单次全景 OCR 识别全窗口文字 (兜底方案)
+        raw_obs = run_vision_ocr(tmp_win)
+        if not raw_obs:
+            return ChatCaptureResult(reply_status="pending")
+
+        # 1. 顶栏活跃联系人解析 (全局几何：x 在 0.26~0.78 之间，y 在顶部 0.84~0.98 区间)
+        header_cands = [o for o in raw_obs if 0.26 <= o["x"] <= 0.78 and o["y"] >= 0.84]
+        header_cands.sort(key=lambda o: -o["y"])
+        detected_contact = None
+        ignore_header = {"q", "search", "<", ">", "微信", "wechat"}
+        for c in header_cands:
+            txt = c["text"].strip()
+            if (txt.lower() not in ignore_header and 
+                not re.search(r"^\d+$", txt) and 
+                not re.match(r"^(\d{1,2}:\d{2})$", txt)):
+                detected_contact = txt
+                break
+
+        # 2. 目标人安全拦截：如果与预期目标不符，立即终止 (防串台)
         if expected_target and detected_contact:
             if not is_contact_match(detected_contact, expected_target):
                 return ChatCaptureResult(
@@ -117,64 +139,100 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
                     is_mismatch=True
                 )
 
-        # 3. 动态自适应裁剪聊天消息气泡区域 (精准停在输入框分割线上方，避开顶部标题栏与左侧联系人栏)
-        img = Image.open(tmp_win)
-        w, h = img.size
-        chat_left = detect_chat_left_x(img)
-        divider_y = detect_input_divider_y(img)
-        crop_left = max(10, chat_left + 1)
-        crop_top = max(45, int(h * 0.060))
-        crop_bottom = min(divider_y - 2, int(h * 0.86))
-        crop_box = (crop_left, crop_top, int(w * 0.985), crop_bottom)
-        cropped = img.crop(crop_box)
-        cropped.save(tmp_crop)
+        # 3. 输入框下边界检测 (寻找底部 Send/发送 或 底部按钮，通常 y <= 0.22)
+        send_btns = [
+            o for o in raw_obs
+            if o["text"] in ["Send", "发送"] or (o["x"] >= 0.80 and o["y"] <= 0.22) or any(k in o["text"] for k in ["按 Enter", "Ctrl+Enter"])
+        ]
+        input_y = max([b["y"] for b in send_btns]) + 0.04 if send_btns else 0.16
 
-        # 4. 执行 OCR 并提取像素特征
-        raw_obs = run_vision_ocr(tmp_crop)
-        if not raw_obs:
-            return ChatCaptureResult(contact_name=detected_contact, reply_status="pending")
+        # 4. 聊天消息区全局几何过滤：
+        # 微信布局：左侧导航与会话列表占据 x < 0.35；右侧主聊天区严格占据 x >= 0.36
+        # 纵向：input_y <= y < 0.84 (完全排除输入框草稿与顶部标题栏)
+        chat_raw = [o for o in raw_obs if o["x"] >= 0.36 and input_y <= o["y"] < 0.84]
 
-        obs_list = []
-        for item in raw_obs:
-            has_green = has_green_bubble_background(
-                cropped, item["x"], item["y"], item["w"], item["h"]
-            )
-            obs_list.append({
-                "y": item["y"],
-                "x": item["x"],
-                "w": item["w"],
-                "r_x": item["r_x"],
-                "txt": item["text"],
-                "has_green": has_green
-            })
+        # 按时间由旧到新排序 (Vision 原点在左下角，y 越大越靠上；从上到下按 -y 倒序排序)
+        chat_raw.sort(key=lambda o: -o["y"])
 
-        # 按时间自上而下排序 (y 倒序)
-        obs_list.sort(key=lambda it: -it["y"])
+        # 5. 过滤噪音并打标 (TIME / EGO / TARGET / QUOTE)
+        elements = []
+        noise_keywords = [
+            "send", "发送", "按 enter", "ctrl+enter", "按 esc", "小胶囊", "点击复制",
+            "抓取最新", "导入建档", "④", "口*、心", "uu.l", "曰％", "已发出"
+        ]
 
-        # 5. 过滤时间标签与日历组件
-        filtered_elements = _filter_and_tag_bubbles(obs_list)
+        for item in chat_raw:
+            txt = item["text"].strip()
+            low = txt.lower()
+            if any(k in low for k in noise_keywords):
+                continue
+            if not re.search(r"[\u4e00-\u9fa5a-zA-Z0-9]", txt):
+                continue
 
-        # 5.1 探测聊天视口中的图片/照片气泡并转化为语义描述 (多模态转译与缓存)
+            # 时间戳判定 (居中且符合时间格式)
+            is_time = bool(re.search(r"(\d{1,2}:\d{2})", txt) or any(k in txt for k in ["昨天", "今天", "星期", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]))
+            is_centered = (0.50 <= item["x"] <= 0.75) and (item["w"] < 0.20)
+            if is_time and is_centered:
+                elements.append(("TIME", txt, item))
+                continue
+
+            # 角色判定：检查是否为绿底气泡，或在聊天面板右侧 (r_x > 0.80 且 x > 0.48)
+            has_green = has_green_bubble_background(img, item["x"], item["y"], item["w"], item["h"])
+            is_ego = has_green or (item["r_x"] > 0.80 and item["x"] > 0.48)
+            if is_ego:
+                elements.append(("EGO", txt, item))
+            else:
+                # 对方气泡内引用判定 (单聊中任何 `xxx：` 均为对方引用我方发言)
+                m = re.match(r"^([^\n：:]{1,16})[：:]([\s\S]*)", txt)
+                if m:
+                    if "\n" in txt:
+                        p1, p2 = txt.split("\n", 1)
+                        elements.append(("QUOTE_EGO", p1.strip(), item))
+                        if p2.strip():
+                            elements.append(("TARGET", p2.strip(), item))
+                    else:
+                        elements.append(("QUOTE_EGO", txt, item))
+                else:
+                    elements.append(("TARGET", txt, item))
+
+        # 5.1 图片气泡多模态识别 (仅针对无文字的真实照片气泡，绝不干扰文字气泡与绿色发言气泡)
         try:
             from capture.image_detector import detect_chat_image_bubbles
-            detected_images = detect_chat_image_bubbles(cropped, tmp_crop, known_text_boxes=raw_obs)
+            cw_min_x, ch_min_y = int(w * 0.35), int(h * 0.08)
+            cw_max_x, ch_max_y = int(w * 0.98), int(h * (1.0 - input_y))
+            chat_crop_box = (cw_min_x, ch_min_y, cw_max_x, ch_max_y)
+            chat_cropped = img.crop(chat_crop_box)
+            tmp_img_crop = "/tmp/echolens_wc_img_crop.png"
+            chat_cropped.save(tmp_img_crop)
+
+            # 将已知文字框换算为裁剪区相对像素坐标
+            crop_text_boxes = []
+            for tb in chat_raw:
+                tbx = int(tb["x"] * w) - cw_min_x
+                tby = int((1.0 - tb["y"] - tb["h"]) * h) - ch_min_y
+                tbw = int(tb["w"] * w)
+                tbh = int(tb["h"] * h)
+                crop_text_boxes.append({"x": tbx, "y": tby, "w": tbw, "h": tbh})
+
+            detected_images = detect_chat_image_bubbles(chat_cropped, tmp_img_crop, known_text_boxes=crop_text_boxes)
             for img_item in detected_images:
-                filtered_elements.append((
+                # 映射回全屏 y 坐标
+                full_y = input_y + (img_item["y"] * (0.84 - input_y))
+                elements.append((
                     img_item["role"],
                     img_item["text"],
-                    {"y": img_item["y"], "is_image": True}
+                    {"y": full_y, "is_image": True}
                 ))
             if detected_images:
-                # 重新按 y 轴自上而下排序 (Vision y 坐标倒序，y 越大越靠上)
-                filtered_elements.sort(key=lambda el: -el[2].get("y", 0.0))
+                elements.sort(key=lambda el: -el[2].get("y", 0.0))
         except Exception as e:
-            print(f"[Image Bubble Ingestion Warning] {e}")
+            print(f"[Image Detection Warning] {e}")
 
-        if not filtered_elements:
+        if not elements:
             return ChatCaptureResult(contact_name=detected_contact, reply_status="pending")
 
-        # 6. 回合切分与气泡折行合并 (Turn Grouping with time hint tracking)
-        grouped_turns = _group_turns(filtered_elements)
+        # 6. 回合切分与气泡折行合并
+        grouped_turns = _group_turns(elements)
         if not grouped_turns:
             return ChatCaptureResult(contact_name=detected_contact, reply_status="pending")
 
@@ -187,27 +245,23 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
             dialogue_lines.append(f"{time_prefix}[{spk}]{quote_suffix}: {t['text']}")
         dialogue_context = "\n".join(dialogue_lines)
 
-        # 8. 判定情况 1 vs 情况 2:
+        # 8. 判定情况 1 vs 情况 2
         last_turn = grouped_turns[-1]
         last_role = last_turn["role"]
         last_text = last_turn["text"]
         latest_time_hint = last_turn.get("time_hint")
 
         if last_role == "EGO":
-            # 情况 1: 如果最后一条是我的回复，说明这个是我最新的回复消息
-            # 然后和上一次我回复消息之间的所有都是对方的消息，一块展示到对方那栏
             case_type = 1
             ego_text = last_text
             reply_status = "replied"
 
-            # 寻找倒数第二次 EGO (上一次我的回复)
             prev_ego_idx = -1
             for idx in range(len(grouped_turns) - 2, -1, -1):
                 if grouped_turns[idx]["role"] == "EGO":
                     prev_ego_idx = idx
                     break
 
-            # 上一次我的回复与这次我的回复之间所有的对方消息
             if prev_ego_idx != -1:
                 target_turns_between = [
                     t["text"] for t in grouped_turns[prev_ego_idx + 1 : -1]
@@ -224,12 +278,9 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
             incoming_text = "\n".join(target_turns_between) if target_turns_between else ""
 
         else:
-            # 情况 2: 如果最后一条不是我的回复（是对方的消息）
-            # 找到上一次我的消息，上一次我的消息下面的所有就都是对方最新的消息，我还没回复
             case_type = 2
             reply_status = "pending"
 
-            # 寻找上一次我的消息 (最后一个 EGO)
             last_ego_idx = -1
             for idx in range(len(grouped_turns) - 1, -1, -1):
                 if grouped_turns[idx]["role"] == "EGO":
@@ -249,8 +300,7 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
                 ]
                 last_ego_text = ""
 
-            # 保留我方上一句真实回复，绝不在对方来消息时清空抹除为无
-            ego_text = last_ego_text or "暂未回复"
+            ego_text = "暂未回复"
             incoming_text = "\n".join(target_turns_below) if target_turns_below else last_text
 
         return ChatCaptureResult(
@@ -271,65 +321,6 @@ def capture_chat_snapshot(expected_target: Optional[str] = None) -> ChatCaptureR
 
     return ChatCaptureResult(reply_status="pending")
 
-def _filter_and_tag_bubbles(obs_list: List[dict], ego_aliases: List[str] = None) -> List[tuple]:
-    """
-    过滤杂音并打标角色 (TIME / EGO / TARGET / QUOTE_EGO)
-    空间排版与几何基准:
-    - cropped 图坐标系中，Vision 归一化横坐标 (0.0~1.0):
-      * TARGET (对方): 气泡靠左对齐，文本起始 x < 0.25，文本结束 r_x < 0.72。左侧头像位于 x < 0.08。
-      * EGO (我方): 气泡靠右对齐，文本结束 r_x > 0.72 且 x > 0.18，或识别区包含微信标志性绿底。
-      * TIME/SYSTEM (时间戳/居中提示): 居中对齐 (0.25 <= x <= 0.75 且 w < 0.40)，匹配时间或系统日期格式。
-    """
-    noise_keywords = [
-        "send", "发送", "按 enter", "ctrl+enter", "按 esc", "小胶囊", "点击复制",
-        "抓取最新", "导入建档", "④", "口*、心", "uu.l", "曰％", "已发出"
-    ]
-
-    elements = []
-
-    for item in obs_list:
-        txt = item["txt"].strip()
-        low = txt.lower()
-
-        # 1. 强特征语义过滤：绝对排除输入框按钮词与无意义乱码
-        if any(k in low for k in noise_keywords):
-            continue
-        if not re.search(r"[\u4e00-\u9fa5a-zA-Z0-9]", txt):
-            continue
-        # 过滤边缘杂点或头像残影 (左侧边缘头像框与徽标)
-        if item["x"] < 0.05 and item["r_x"] < 0.08:
-            continue
-        # 过滤底部单字或残损标点
-        if len(txt) == 1 and item["y"] < 0.15:
-            continue
-
-        # 2. 时间戳与系统日期判定 (居中且匹配时间格式)
-        is_time = bool(re.search(r"(\d{1,2}:\d{2})", txt) or any(k in txt for k in ["昨天", "今天", "星期", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]))
-        is_centered = (0.25 <= item["x"] <= 0.75) and (item["w"] < 0.40)
-        if is_time and is_centered:
-            elements.append(("TIME", txt, item))
-            continue
-
-        # 3. 角色判定：绿色气泡或靠右对齐严格判定为我方 (EGO)
-        is_ego = item["has_green"] or (item["r_x"] > 0.72 and item["x"] > 0.18)
-        if is_ego:
-            elements.append(("EGO", txt, item))
-        else:
-            # 4. 对方 (TARGET) 气泡内引用判定 (单聊中任何 `xxx：` 均为对方引用我方发言)
-            m = re.match(r"^([^\n：:]{1,16})[：:]([\s\S]*)", txt)
-            if m:
-                if "\n" in txt:
-                    p1, p2 = txt.split("\n", 1)
-                    elements.append(("QUOTE_EGO", p1.strip(), item))
-                    if p2.strip():
-                        elements.append(("TARGET", p2.strip(), item))
-                else:
-                    elements.append(("QUOTE_EGO", txt, item))
-            else:
-                elements.append(("TARGET", txt, item))
-
-    return elements
-
 def _group_turns(elements: List[tuple]) -> List[Dict[str, Any]]:
     """聚合连击短气泡并智能合并中文折行长句，关联时间戳，剥离引用污染"""
     grouped = []
@@ -337,8 +328,10 @@ def _group_turns(elements: List[tuple]) -> List[Dict[str, Any]]:
     current_lines = []
     current_time_hint = None
     current_quote = []
+    last_y = None
 
-    for role, txt, _ in elements:
+    for role, txt, item in elements:
+        y = item.get("y", 0.0) if isinstance(item, dict) else 0.0
         if role == "TIME":
             current_time_hint = txt
             continue
@@ -359,16 +352,18 @@ def _group_turns(elements: List[tuple]) -> List[Dict[str, Any]]:
                 current_quote = []
             current_role = role
             current_lines = [txt]
+            last_y = y
         else:
-            # 中文自然折行判定
-            if (current_lines and 
-                len(current_lines[-1]) > 0 and 
+            # 中文自然折行判定：垂直距离极近 (同气泡内折行，delta_y < 0.032) 且上一行未以标点结束
+            is_same_bubble = (last_y is not None) and (abs(last_y - y) < 0.032)
+            if (is_same_bubble and current_lines and 
                 not current_lines[-1].endswith(("。", "！", "？", "…", "，", ",", "!", "?", "；", ";")) and
                 re.match(r"[\u4e00-\u9fa5]", current_lines[-1][-1]) and
                 re.match(r"[\u4e00-\u9fa5]", txt[0])):
                 current_lines[-1] += txt
             else:
                 current_lines.append(txt)
+            last_y = y
 
     if current_role and current_lines:
         grouped.append({

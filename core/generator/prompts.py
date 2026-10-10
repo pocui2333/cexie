@@ -133,7 +133,9 @@ def build_user_prompt(
     calibrated_terms: Optional[List[Dict[str, str]]] = None,
     env_context: Optional[str] = None,
     knowledge_guidance: Optional[Dict[str, str]] = None,
-    today_memory: Optional[List[Dict[str, Any]]] = None
+    today_memory: Optional[List[Dict[str, Any]]] = None,
+    is_replied: bool = False,
+    last_ego_text: Optional[str] = None
 ) -> str:
     ctx_section = f"【最近多轮对话上下文】:\n{context_text}\n\n" if context_text else ""
     
@@ -186,4 +188,18 @@ def build_user_prompt(
             term_blocks.append(block)
         terms_section = "【外部专有名词认知校准与防瞎编指引 (已实时检索外部知识，请据此确定我方合理认知边界，陌生领域以真诚好奇提问切入)】:\n" + "\n\n".join(term_blocks) + "\n\n"
 
-    return f"{ctx_section}{today_section}{env_section}{knowledge_section}{mem_section}{qa_section}{ego_section}{terms_section}【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n请严格以对方最新这句消息为核心接球点，接住对方的情绪与分享欲，结合最新图片画面、今日进行时工作记忆（积极做延时呼应/回扣）、当下时空背景与我方真实认知边界，条条都要让对方读了开心舒服，输出包含 subtext、risk_alert、keywords 及 options 6 个槽位的严格 JSON 对象，严禁任何 markdown 解释或代码块包裹。"
+    if is_replied and last_ego_text:
+        focus_section = (
+            f"【当前对话进展状态（我方刚刚已发送回复，现生成后续推进/延伸卡片）】:\n"
+            f"对方刚才说的: \"{incoming_text}\"\n"
+            f"我方刚发出的最新回复: \"{last_ego_text}\"\n\n"
+            f"请结合当前最新进展，生成 6 档【主动推进 / 延伸话轮 / 乘胜追击 / 轻松跟进 / 未来邀约】的下一步可选建议，"
+            f"让我方随时可以顺势继续抛球、开启延伸话题或自然互动！"
+        )
+    else:
+        focus_section = (
+            f"【对方最新发来的消息气泡（待回复）】:\n{incoming_text}\n\n"
+            f"请严格以对方最新这句消息为核心接球点，接住对方的情绪与分享欲，"
+        )
+
+    return f"{ctx_section}{today_section}{env_section}{knowledge_section}{mem_section}{qa_section}{ego_section}{terms_section}{focus_section}结合最新图片画面、今日进行时工作记忆（积极做延时呼应/回扣）、当下时空背景与我方真实认知边界，条条都要让对方读了开心舒服，输出包含 subtext、risk_alert、keywords 及 options 6 个槽位的严格 JSON 对象，严禁任何 markdown 解释或代码块包裹。"
