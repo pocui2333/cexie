@@ -66,8 +66,14 @@ class EchoLensHUD {
         this.targetMessageTime = document.getElementById('target-message-time');
         this.incomingBox = document.getElementById('incoming-message-box');
         this.egoMessageBox = document.getElementById('ego-message-box');
-        this.egoStatusBadge = document.getElementById('ego-status-badge');
         this.dualTrackGrid = document.getElementById('dual-track-grid');
+
+        // 僚机洞察脚手架元素
+        this.insightSection = document.getElementById('insight-scaffolding-section');
+        this.insightSubtextText = document.getElementById('insight-subtext-text');
+        this.insightRiskRow = document.getElementById('insight-risk-row');
+        this.insightRiskText = document.getElementById('insight-risk-text');
+        this.insightChipsContainer = document.getElementById('insight-chips-container');
 
         // 统计面板元素
         this.statsSection = document.getElementById('stats-section');
@@ -141,14 +147,24 @@ class EchoLensHUD {
             this.btnAutoLoop.addEventListener('click', () => this.toggleAutoLoop());
         }
 
-        // 6. 卡片点击即复制 (事件委托)
+        // 6. 卡片与破局灵感胶囊点击即复制 (事件委托)
         if (this.mainContainer) {
             this.mainContainer.addEventListener('click', (e) => {
                 const card = e.target.closest('.option-card');
-                if (!card) return;
-                const replyText = card.getAttribute('data-reply');
-                if (replyText) {
-                    this.copyToClipboard(replyText, card);
+                if (card) {
+                    const replyText = card.getAttribute('data-reply');
+                    if (replyText) {
+                        this.copyToClipboard(replyText, card);
+                    }
+                    return;
+                }
+                const chip = e.target.closest('.chip-pill');
+                if (chip) {
+                    const kw = chip.getAttribute('data-keyword') || chip.textContent;
+                    if (kw) {
+                        this.copyKeyword(kw, chip);
+                    }
+                    return;
                 }
             });
         }
@@ -287,6 +303,23 @@ class EchoLensHUD {
             }
         }).catch(err => {
             console.error('复制失败', err);
+        });
+    }
+
+    copyKeyword(kw, chipElement) {
+        if (!kw) return;
+        navigator.clipboard.writeText(kw).then(() => {
+            if (chipElement) {
+                const orig = chipElement.textContent;
+                chipElement.textContent = '已复制';
+                chipElement.classList.add('copied');
+                setTimeout(() => {
+                    chipElement.textContent = orig;
+                    chipElement.classList.remove('copied');
+                }, 900);
+            }
+        }).catch(err => {
+            console.error('复制词汇失败', err);
         });
     }
 
@@ -539,10 +572,10 @@ class EchoLensHUD {
             this.showStats(data.stats);
         } else if (data.options && data.options.length === 6) {
             this.hideStats();
-            const newSig = data.options.map(o => `${o.slot_id}:${o.reply_text}`).join('|');
+            const newSig = data.options.map(o => `${o.slot_id}:${o.reply_text}`).join('|') + `|${(data.insight && data.insight.subtext) || ''}`;
             if (newSig !== this.lastOptionsSignature) {
                 this.lastOptionsSignature = newSig;
-                this.renderCards(data.options);
+                this.renderCards(data.options, data.insight);
             }
         }
     }
@@ -613,6 +646,9 @@ class EchoLensHUD {
     }
 
     clearCards() {
+        if (this.insightSection) {
+            this.insightSection.style.display = 'none';
+        }
         const dualSection = document.querySelector('.dual-track-section');
         if (dualSection) {
             dualSection.style.display = 'none';
@@ -627,9 +663,39 @@ class EchoLensHUD {
         this.fitWindowToContent(true);
     }
 
-    renderCards(options) {
+    renderCards(options, insight) {
         if (!options || options.length !== 6 || !this.dualTrackGrid) return;
         this.hideStats();
+
+        // 1. 渲染僚机洞察脚手架 (潜台词洞察 + 避坑预警 + 灵感关键词胶囊)
+        if (this.insightSection) {
+            if (insight && (insight.subtext || (insight.keywords && insight.keywords.length > 0))) {
+                this.insightSection.style.display = 'flex';
+                if (this.insightSubtextText) {
+                    this.insightSubtextText.textContent = insight.subtext || '日常松弛交流 · 享受随性互动';
+                }
+                if (this.insightRiskRow && this.insightRiskText) {
+                    if (insight.risk_alert) {
+                        this.insightRiskRow.style.display = 'flex';
+                        this.insightRiskText.textContent = insight.risk_alert;
+                    } else {
+                        this.insightRiskRow.style.display = 'none';
+                    }
+                }
+                if (this.insightChipsContainer) {
+                    const kws = (insight.keywords && insight.keywords.length > 0) ? insight.keywords : [];
+                    if (kws.length > 0) {
+                        this.insightChipsContainer.innerHTML = kws.map(kw => `
+                            <span class="chip-pill" data-keyword="${this.escapeHtml(kw)}" title="点击复制词汇">${this.escapeHtml(kw)}</span>
+                        `).join('');
+                    } else {
+                        this.insightChipsContainer.innerHTML = '';
+                    }
+                }
+            } else {
+                this.insightSection.style.display = 'none';
+            }
+        }
 
         const dualSection = document.querySelector('.dual-track-section');
         if (dualSection) {
@@ -646,6 +712,7 @@ class EchoLensHUD {
             <div class="track-header header-evolved">微调提升</div>
             ${sorted.map(o => {
                 const isElevated = o.slot_id >= 4;
+                const rationaleHtml = o.tactical_rationale ? `<div class="card-rationale">↳ ${this.escapeHtml(o.tactical_rationale)}</div>` : '';
                 return `
                 <div class="option-card ${isElevated ? 'card-elevated' : ''}" data-slot="${o.slot_id}" data-reply="${this.escapeHtml(o.reply_text)}">
                     <div class="card-meta">
@@ -653,6 +720,7 @@ class EchoLensHUD {
                         <span class="copy-badge">点击复制</span>
                     </div>
                     <div class="card-text">${this.escapeHtml(o.reply_text)}</div>
+                    ${rationaleHtml}
                 </div>
             `;}).join('')}
         `;

@@ -711,6 +711,108 @@ html, body {
     line-height: 1.2;
 }
 
+/* 僚机洞察脚手架 (潜台词洞察 + 避坑预警 + 灵感关键词胶囊) */
+.insight-section {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 2px;
+}
+
+.insight-banner {
+    background: rgba(23, 24, 29, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 7px;
+    padding: 6px 9px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    backdrop-filter: blur(8px);
+}
+
+.insight-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11.5px;
+    line-height: 1.35;
+}
+
+.insight-tag {
+    font-size: 9.5px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    letter-spacing: 0.2px;
+}
+
+.tag-subtext {
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.14);
+    border: 1px solid rgba(56, 189, 248, 0.28);
+}
+
+.tag-risk {
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.14);
+    border: 1px solid rgba(239, 68, 68, 0.28);
+}
+
+.insight-content {
+    color: #e2e8f0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.insight-chips-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 2px;
+    overflow-x: auto;
+}
+
+.chips-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 500;
+    flex-shrink: 0;
+}
+
+.chips-container {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+}
+
+.chip-pill {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #cbd5e1;
+    font-size: 10.5px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.16s ease;
+    user-select: none;
+}
+
+.chip-pill:hover {
+    background: rgba(56, 189, 248, 0.18);
+    border-color: rgba(56, 189, 248, 0.45);
+    color: #38bdf8;
+    transform: translateY(-1px);
+}
+
+.chip-pill.copied {
+    background: rgba(16, 185, 129, 0.22) !important;
+    border-color: rgba(16, 185, 129, 0.6) !important;
+    color: #34d399 !important;
+}
+
 /* 双轨 2x3 选项输出网格 (根据行数动态判断高度，同行严格绝对齐平) */
 .dual-track-section {
     display: flex;
@@ -837,6 +939,14 @@ html, body {
     flex: 1;
     display: flex;
     align-items: center;
+}
+
+.card-rationale {
+    font-size: 9.5px;
+    line-height: 1.25;
+    color: var(--text-muted);
+    opacity: 0.85;
+    word-break: break-all;
 }
 
 /* 复制成功微光动画 */

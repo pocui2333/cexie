@@ -64,6 +64,7 @@ class EchoLensService:
         self.last_clipboard_seen = ""
         self.last_outgoing_reply = ""
         self.cached_options: List[Dict[str, Any]] = []
+        self.cached_insight: Dict[str, Any] = {"subtext": "", "risk_alert": "", "keywords": []}
         self.manual_target_locked = False
         self.current_ego_reply = "暂未回复"
         self.current_reply_status = "pending"
@@ -211,6 +212,7 @@ class EchoLensService:
 
         if snapshot.case_type == 1:
             self.cached_options = []
+            self.cached_insight = {"subtext": "", "risk_alert": "", "keywords": []}
             if not getattr(self, "last_outgoing_time", None):
                 self.last_outgoing_time = time.time()
             if snapshot.ego_text and snapshot.ego_text != "暂未回复":
@@ -228,6 +230,7 @@ class EchoLensService:
     def _refresh_options(self, target_name: str, incoming_text: str, context_text: Optional[str] = None):
         if self.current_reply_status == "replied":
             self.cached_options = []
+            self.cached_insight = {"subtext": "", "risk_alert": "", "keywords": []}
             return
         self.current_incoming = incoming_text
         if context_text is not None:
@@ -235,6 +238,11 @@ class EchoLensService:
         memory_episodes = self.memory.retrieve_memory(target_name, incoming_text, self.current_context)
         result = self.generator.generate(target_name, incoming_text, memory_episodes, self.current_context)
         self.cached_options = [opt.to_dict() for opt in result.options]
+        self.cached_insight = {
+            "subtext": result.subtext,
+            "risk_alert": result.risk_alert,
+            "keywords": result.keywords
+        }
 
     def _background_worker(self):
         while self.running:

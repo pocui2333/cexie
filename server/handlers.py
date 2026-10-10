@@ -44,6 +44,7 @@ class EchoLensHTTPHandler(SimpleHTTPRequestHandler):
                 "sender_name": service_instance.state_machine.last_sender_name,
                 "message_time": service_instance.state_machine.last_incoming_time_str,
                 "options": service_instance.cached_options,
+                "insight": service_instance.cached_insight,
                 "stats": service_instance.get_stats(),
                 "auto_loop_enabled": service_instance.auto_loop_enabled,
                 "auto_loop_countdown": service_instance.auto_loop_countdown

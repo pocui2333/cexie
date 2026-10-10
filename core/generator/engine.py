@@ -51,17 +51,25 @@ class DualTrackGenerator:
         # 动态通用社交与情商知识库策略检索
         knowledge_guidance = self.knowledge_retriever.retrieve_guidance(text_clean)
 
-        options_data = None
+        llm_res = None
         if config.LLM_API_KEY:
             try:
-                options_data = self._call_llm(
+                llm_res = self._call_llm(
                     target_name, text_clean, memory_episodes, rules,
                     context_text, ego_utterances, qa_snippets, calibrated_terms, env_context, knowledge_guidance
                 )
             except Exception as e:
                 print(f"[LLM Generate Error] {e}")
 
-        if not options_data or len(options_data) != 6:
+        if llm_res and isinstance(llm_res, dict) and "options" in llm_res and len(llm_res["options"]) == 6:
+            subtext = llm_res.get("subtext", "").strip()
+            risk_alert = llm_res.get("risk_alert", "").strip()
+            keywords = llm_res.get("keywords", [])
+            options_data = llm_res["options"]
+        else:
+            subtext = "日常松弛交流 · 享受随性互动"
+            risk_alert = "顺着当下的情绪聊，避免客观挑刺或扫兴"
+            keywords = ["顺着聊", "生活日常", "同频互动"]
             options_data = synthesize_scenario_options(
                 target_name, text_clean, memory_episodes, rules,
                 context_text, ego_utterances, qa_snippets, calibrated_terms
@@ -73,15 +81,18 @@ class DualTrackGenerator:
             options.append(GenerationOption(
                 slot_id=idx,
                 track="native" if idx <= 3 else "evolved",
-                sub_goal=item["sub_goal"],
+                sub_goal=item.get("sub_goal", "原生原话"),
                 reply_text=filtered_text,
-                tactical_rationale=item["rationale"]
+                tactical_rationale=item.get("rationale", "")
             ))
 
         return DualTrackResult(
             target_name=target_name,
             incoming_context=text_clean,
-            options=options
+            options=options,
+            subtext=subtext,
+            risk_alert=risk_alert,
+            keywords=keywords
         )
 
     _sentiment_cache: Dict[str, bool] = {}
@@ -214,7 +225,7 @@ class DualTrackGenerator:
         calibrated_terms: Optional[List[Dict[str, str]]] = None,
         env_context: Optional[str] = None,
         knowledge_guidance: Optional[Dict[str, str]] = None
-    ) -> Optional[List[Dict[str, str]]]:
+    ) -> Optional[Dict[str, Any]]:
         import ssl
         try:
             import certifi
@@ -254,23 +265,49 @@ class DualTrackGenerator:
                 content = re.sub(r"^```(?:json)?\n?", "", content)
                 content = re.sub(r"\n?```$", "", content)
             
-            # 提取 JSON 数组
-            match = re.search(r"\[\s*\{.*\}\s*\]", content, re.DOTALL)
-            if match:
-                content = match.group(0)
-
-            # 清理常见非法尾随逗号与格式瑕疵
-            cleaned_json = re.sub(r',\s*([\]}])', r'\1', content)
-            try:
-                parsed = json.loads(cleaned_json, strict=False)
-            except Exception:
+            parsed = None
+            # 1. 尝试匹配完整 JSON 对象
+            match_obj = re.search(r"\{.*\}", content, re.DOTALL)
+            if match_obj:
+                raw_json = match_obj.group(0)
+                cleaned_json = re.sub(r',\s*([\]}])', r'\1', raw_json)
                 try:
-                    parsed = json.loads(content, strict=False)
+                    parsed = json.loads(cleaned_json, strict=False)
                 except Exception:
-                    parsed = None
+                    try:
+                        parsed = json.loads(raw_json, strict=False)
+                    except Exception:
+                        pass
 
-            if isinstance(parsed, list) and len(parsed) == 6:
-                return parsed
+            # 2. 如果解析为对象且包含 options
+            if isinstance(parsed, dict) and "options" in parsed and isinstance(parsed["options"], list) and len(parsed["options"]) == 6:
+                return {
+                    "subtext": str(parsed.get("subtext", "")).strip(),
+                    "risk_alert": str(parsed.get("risk_alert", "")).strip(),
+                    "keywords": parsed.get("keywords", []) if isinstance(parsed.get("keywords"), list) else [],
+                    "options": parsed["options"]
+                }
+
+            # 3. 兜底匹配纯数组格式
+            match_arr = re.search(r"\[\s*\{.*\}\s*\]", content, re.DOTALL)
+            if match_arr:
+                raw_arr = match_arr.group(0)
+                cleaned_arr = re.sub(r',\s*([\]}])', r'\1', raw_arr)
+                try:
+                    parsed_arr = json.loads(cleaned_arr, strict=False)
+                except Exception:
+                    try:
+                        parsed_arr = json.loads(raw_arr, strict=False)
+                    except Exception:
+                        parsed_arr = None
+                if isinstance(parsed_arr, list) and len(parsed_arr) == 6:
+                    return {
+                        "subtext": "",
+                        "risk_alert": "",
+                        "keywords": [],
+                        "options": parsed_arr
+                    }
+
         return None
 
     def _load_ego_profile(self) -> str:
